@@ -5,6 +5,7 @@
 pub mod cartridge;
 pub mod cpu;
 mod model;
+pub mod ppu;
 pub mod timer;
 
 pub use cartridge::{CartError, Header};
