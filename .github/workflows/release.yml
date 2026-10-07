@@ -1,0 +1,84 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*.*.*"]
+
+permissions:
+  contents: write
+
+jobs:
+  prepare:
+    runs-on: ubuntu-22.04
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: 태그와 워크스페이스 버전 일치 확인
+        run: cargo xtask check-tag "${GITHUB_REF_NAME}"
+      - id: version
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+      - name: 초안 릴리스 생성
+        run: gh release create "${GITHUB_REF_NAME}" --draft --title "Aragorn ${{ steps.version.outputs.version }}" --generate-notes
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  package:
+    needs: prepare
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - os: windows-latest
+            exe: aragorn.exe
+          - os: macos-latest
+            exe: aragorn
+          - os: ubuntu-22.04
+            exe: aragorn
+    runs-on: ${{ matrix.os }}
+    env:
+      VERSION: ${{ needs.prepare.outputs.version }}
+      ARAGORN_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Linux 빌드 의존성
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libxkbcommon-dev libwayland-dev libgl1-mesa-dev
+      - run: cargo test --workspace
+      - run: cargo build --release -p aragorn-desktop
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "9.0.x"
+      - name: vpk 설치 (velopack 크레이트와 같은 버전)
+        shell: bash
+        run: |
+          VPK_VERSION="$(cargo pkgid velopack | sed 's/.*[@#]//')"
+          dotnet tool install -g vpk --version "$VPK_VERSION"
+      - name: 패키징과 업로드
+        shell: bash
+        run: |
+          mkdir publish
+          cp "target/release/${{ matrix.exe }}" publish/
+          vpk pack --packId Aragorn --packVersion "$VERSION" --packDir publish --mainExe "${{ matrix.exe }}" --packTitle Aragorn
+          vpk upload github --repoUrl "https://github.com/${{ github.repository }}" \
+            --token "${{ secrets.GITHUB_TOKEN }}" --tag "v$VERSION" --releaseName "Aragorn $VERSION" --merge
+
+  publish:
+    needs: [prepare, package]
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: 업데이트 정책 생성과 서명
+        run: cargo xtask make-policy dist
+        env:
+          ARAGORN_POLICY_SIGNING_KEY: ${{ secrets.ARAGORN_POLICY_SIGNING_KEY }}
+      - name: 정책 업로드 후 릴리스 공개
+        run: |
+          gh release upload "${GITHUB_REF_NAME}" dist/update-policy.json dist/update-policy.json.sig
+          gh release edit "${GITHUB_REF_NAME}" --draft=false --latest
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
