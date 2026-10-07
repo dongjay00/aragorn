@@ -6,6 +6,8 @@ pub struct FlatBus {
     pub mem: Vec<u8>,
     /// 진행한 M-사이클 수.
     pub cycles: u32,
+    /// (사이클, IF 비트): 그 사이클의 tick에서 IF에 비트를 켠다 (주변장치 인터럽트 흉내).
+    pub irq_at: Option<(u32, u8)>,
 }
 
 impl FlatBus {
@@ -13,7 +15,11 @@ impl FlatBus {
     pub fn with_program(program: &[u8]) -> Self {
         let mut mem = vec![0; 0x10000];
         mem[0x0100..0x0100 + program.len()].copy_from_slice(program);
-        Self { mem, cycles: 0 }
+        Self {
+            mem,
+            cycles: 0,
+            irq_at: None,
+        }
     }
 }
 
@@ -28,5 +34,10 @@ impl CpuBus for FlatBus {
 
     fn tick(&mut self) {
         self.cycles += 1;
+        if let Some((cycle, mask)) = self.irq_at
+            && cycle == self.cycles
+        {
+            self.mem[0xFF0F] |= mask;
+        }
     }
 }

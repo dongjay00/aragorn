@@ -383,3 +383,73 @@ fn ei_then_halt_with_pending_interrupt_returns_to_halt() {
     assert_eq!((cpu.regs.pc, cpu.regs.b), (0x0041, 1));
     assert_eq!((bus.mem[0xCFFF], bus.mem[0xCFFE]), (0x01, 0x01));
 }
+
+#[test]
+fn interrupt_raised_during_fetch_cycle_preempts_that_instruction() {
+    // NOP ; INC A. 두 번째 fetch 사이클에 타이머 IF가 켜지면 INC A 대신 디스패치한다.
+    let (cpu, bus) = run(&[0x00, 0x3C], 2, |c, b| {
+        c.ime = true;
+        b.mem[0xFFFF] = 0x04;
+        b.irq_at = Some((2, 0x04));
+    });
+    assert_eq!((cpu.regs.pc, cpu.regs.a, bus.cycles), (0x0050, 0, 6));
+    assert_eq!((bus.mem[0xCFFF], bus.mem[0xCFFE]), (0x01, 0x01));
+}
+
+#[test]
+fn ie_overwritten_by_upper_pc_push_cancels_dispatch() {
+    // SP=0x0000이면 PC 상위 바이트(0x02)가 IE(0xFFFF)에 써진다. VBlank 비트가 꺼지므로 취소된다.
+    let (cpu, bus) = run(&[], 1, |c, b| {
+        c.ime = true;
+        c.regs.pc = 0x0200;
+        c.regs.sp = 0x0000;
+        b.mem[0xFFFF] = 0x01;
+        b.mem[0xFF0F] = 0x01;
+    });
+    assert_eq!((cpu.regs.pc, cpu.ime(), bus.cycles), (0x0000, false, 5));
+    assert_eq!(
+        (bus.mem[0xFFFF], bus.mem[0xFFFE], bus.mem[0xFF0F]),
+        (0x02, 0x00, 0x01)
+    );
+}
+
+#[test]
+fn ie_overwritten_by_lower_pc_push_does_not_cancel() {
+    // SP=0x0001이면 하위 바이트가 IE에 써지지만 벡터는 이미 정해졌다.
+    let (cpu, bus) = run(&[], 1, |c, b| {
+        c.ime = true;
+        c.regs.pc = 0x0200;
+        c.regs.sp = 0x0001;
+        b.mem[0xFFFF] = 0x01;
+        b.mem[0xFF0F] = 0x01;
+    });
+    assert_eq!(cpu.regs.pc, 0x0040);
+    assert_eq!(
+        (bus.mem[0x0000], bus.mem[0xFFFF], bus.mem[0xFF0F]),
+        (0x02, 0x00, 0x00)
+    );
+}
+
+#[test]
+fn halt_with_ime_dispatches_in_the_wake_cycle() {
+    // HALT 중 2번째 사이클에 IF가 켜지면 그 사이클이 fetch 사이클이 되어 바로 디스패치한다.
+    let (cpu, bus) = run(&[0x76, 0x00], 2, |c, b| {
+        c.ime = true;
+        b.mem[0xFFFF] = 0x01;
+        b.irq_at = Some((2, 0x01));
+    });
+    assert_eq!((cpu.regs.pc, bus.cycles), (0x0040, 6));
+    assert_eq!((bus.mem[0xCFFF], bus.mem[0xCFFE]), (0x01, 0x01));
+}
+
+#[test]
+fn halt_without_ime_wakes_and_executes_in_the_same_cycle() {
+    let (cpu, bus) = run(&[0x76, 0x3C], 2, |_, b| {
+        b.mem[0xFFFF] = 0x01;
+        b.irq_at = Some((2, 0x01));
+    });
+    assert_eq!(
+        (cpu.regs.a, cpu.regs.pc, cpu.halted(), bus.cycles),
+        (1, 0x0102, false, 2)
+    );
+}

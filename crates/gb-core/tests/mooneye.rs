@@ -63,6 +63,7 @@ mooneye_tests! {
     halt_ime1_timing2 => "acceptance/halt_ime1_timing2-GS.gb",
     if_ie_registers => "acceptance/if_ie_registers.gb",
     instr_daa => "acceptance/instr/daa.gb",
+    interrupts_ie_push => "acceptance/interrupts/ie_push.gb",
     intr_timing => "acceptance/intr_timing.gb",
     oam_dma_reg_read => "acceptance/oam_dma/reg_read.gb",
     pop_timing => "acceptance/pop_timing.gb",
