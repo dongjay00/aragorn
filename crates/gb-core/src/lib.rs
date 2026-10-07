@@ -5,4 +5,5 @@
 pub mod cpu;
 mod model;
 
+pub use cpu::{IllegalOpcode, Registers};
 pub use model::Model;
