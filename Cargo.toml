@@ -6,3 +6,8 @@ members = ["crates/gb-core", "crates/aragorn-app", "crates/aragorn-desktop", "xt
 version = "0.1.2"
 edition = "2024"
 license = "MIT"
+
+# 에뮬레이션 코어는 디버그 빌드에서도 최적화한다.
+# 테스트 ROM 인수 테스트(에뮬레이션 시간 약 1분 분량)와 개발 중 실행 속도 때문이다.
+[profile.dev.package.gb-core]
+opt-level = 3
