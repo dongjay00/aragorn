@@ -3,6 +3,7 @@
 use crate::bus::Bus;
 use crate::cartridge::{CartError, Cartridge, Header};
 use crate::cpu::{Cpu, IllegalOpcode, Registers};
+use crate::joypad::Button;
 use crate::model::Model;
 use crate::ppu;
 
@@ -52,6 +53,11 @@ impl GameBoy {
     /// 160×144, 각 픽셀은 0xRRGGBBAA.
     pub fn framebuffer(&self) -> &[u32] {
         self.bus.ppu().framebuffer()
+    }
+
+    /// 키를 누르거나 뗀다. 선택된 줄에서 새로 눌리면 조이패드 인터럽트를 요청한다.
+    pub fn set_button(&mut self, button: Button, pressed: bool) {
+        self.bus.set_button(button, pressed);
     }
 
     pub fn debug(&self) -> DebugView<'_> {
@@ -171,5 +177,19 @@ mod tests {
         let mut gb = gb_with_program(&[0x3E, b'O', 0xE0, 0x01, 0x3E, 0x81, 0xE0, 0x02, 0x18, 0xFE]);
         gb.run_frame();
         assert_eq!(gb.debug().serial_output(), b"O");
+    }
+
+    #[test]
+    fn pressed_button_is_visible_through_p1() {
+        // LD A,0x10 ; LDH (0x00),A (버튼 줄 선택) ; JR -2
+        let mut gb = gb_with_program(&[0x3E, 0x10, 0xE0, 0x00, 0x18, 0xFE]);
+        gb.run_frame();
+        gb.set_button(Button::Start, true);
+        assert_eq!(gb.debug().peek(0xFF00) & 0x0F, 0x07);
+        assert_eq!(
+            gb.debug().peek(0xFF0F) & 0x10,
+            0x10,
+            "조이패드 인터럽트 요청"
+        );
     }
 }
