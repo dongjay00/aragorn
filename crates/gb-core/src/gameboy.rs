@@ -3,6 +3,7 @@
 use crate::bus::Bus;
 use crate::cartridge::{CartError, Cartridge, Header};
 use crate::cpu::{Cpu, IllegalOpcode, Registers};
+use crate::joypad::Button;
 use crate::model::Model;
 use crate::ppu;
 
@@ -52,6 +53,31 @@ impl GameBoy {
     /// 160×144, 각 픽셀은 0xRRGGBBAA.
     pub fn framebuffer(&self) -> &[u32] {
         self.bus.ppu().framebuffer()
+    }
+
+    /// 키를 누르거나 뗀다. 선택된 줄에서 새로 눌리면 조이패드 인터럽트를 요청한다.
+    pub fn set_button(&mut self, button: Button, pressed: bool) {
+        self.bus.set_button(button, pressed);
+    }
+
+    /// 세이브 파일로 남길 외부 RAM. 배터리가 없는 카트리지는 `None`.
+    pub fn battery_ram(&self) -> Option<Vec<u8>> {
+        self.bus.cartridge().battery_ram().map(<[u8]>::to_vec)
+    }
+
+    /// 세이브 파일 내용을 싣는다. `now_unix`는 MBC3 RTC의 오프라인 경과 보정용이다(M6).
+    pub fn load_battery_ram(&mut self, data: &[u8], _now_unix: u64) {
+        self.bus.cartridge_mut().load_battery_ram(data);
+    }
+
+    /// 마지막 호출 뒤 외부 RAM에 쓰기가 있었으면 `true`. 읽으면 초기화된다.
+    pub fn battery_dirty(&mut self) -> bool {
+        self.bus.cartridge_mut().take_ram_dirty()
+    }
+
+    /// 게임이 외부 RAM을 켜 두었는지. 게임은 보통 저장을 마치면 RAM을 끈다.
+    pub fn cartridge_ram_enabled(&self) -> bool {
+        self.bus.cartridge().ram_enabled()
     }
 
     pub fn debug(&self) -> DebugView<'_> {
@@ -171,5 +197,61 @@ mod tests {
         let mut gb = gb_with_program(&[0x3E, b'O', 0xE0, 0x01, 0x3E, 0x81, 0xE0, 0x02, 0x18, 0xFE]);
         gb.run_frame();
         assert_eq!(gb.debug().serial_output(), b"O");
+    }
+
+    /// MBC1+RAM+BATTERY(0x03), 8KB RAM. 0x0100: RAM 켜기 → 0xA000에 0x42 쓰기 → RAM 끄기 → 제자리 루프.
+    fn saving_rom() -> Vec<u8> {
+        let mut rom = test_rom(0x03, 0x00, 0x00);
+        rom[0x0149] = 0x02;
+        let program = [
+            0x3E, 0x0A, 0xEA, 0x00, 0x00, // LD A,0x0A ; LD (0x0000),A
+            0x3E, 0x42, 0xEA, 0x00, 0xA0, // LD A,0x42 ; LD (0xA000),A
+            0xAF, 0xEA, 0x00, 0x00, // XOR A ; LD (0x0000),A
+            0x18, 0xFE, // JR -2
+        ];
+        rom[0x0100..0x0100 + program.len()].copy_from_slice(&program);
+        rom
+    }
+
+    #[test]
+    fn battery_ram_is_exposed_only_for_battery_carts() {
+        let gb = GameBoy::new(saving_rom(), Model::Dmg).unwrap();
+        assert_eq!(gb.battery_ram().map(|r| r.len()), Some(0x2000));
+        let gb = gb_with_program(&[0x00]);
+        assert_eq!(gb.battery_ram(), None);
+    }
+
+    #[test]
+    fn game_writes_mark_battery_dirty_and_disable_ram() {
+        let mut gb = GameBoy::new(saving_rom(), Model::Dmg).unwrap();
+        assert!(!gb.battery_dirty());
+        gb.run_frame();
+        assert!(gb.battery_dirty());
+        assert!(!gb.battery_dirty(), "읽으면 초기화");
+        assert!(!gb.cartridge_ram_enabled());
+        assert_eq!(gb.battery_ram().unwrap()[0], 0x42);
+    }
+
+    #[test]
+    fn loaded_battery_ram_is_visible_to_the_game() {
+        let mut gb = GameBoy::new(saving_rom(), Model::Dmg).unwrap();
+        gb.load_battery_ram(&[0x11, 0x22], 0);
+        let ram = gb.battery_ram().unwrap();
+        assert_eq!((ram[0], ram[1], ram[2]), (0x11, 0x22, 0x00));
+        assert!(!gb.battery_dirty(), "불러오기는 게임의 쓰기가 아니다");
+    }
+
+    #[test]
+    fn pressed_button_is_visible_through_p1() {
+        // LD A,0x10 ; LDH (0x00),A (버튼 줄 선택) ; JR -2
+        let mut gb = gb_with_program(&[0x3E, 0x10, 0xE0, 0x00, 0x18, 0xFE]);
+        gb.run_frame();
+        gb.set_button(Button::Start, true);
+        assert_eq!(gb.debug().peek(0xFF00) & 0x0F, 0x07);
+        assert_eq!(
+            gb.debug().peek(0xFF0F) & 0x10,
+            0x10,
+            "조이패드 인터럽트 요청"
+        );
     }
 }

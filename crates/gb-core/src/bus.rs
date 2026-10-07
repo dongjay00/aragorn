@@ -2,6 +2,7 @@
 
 use crate::cartridge::Cartridge;
 use crate::cpu::{CpuBus, IE_ADDR, IF_ADDR};
+use crate::joypad::{self, Button, Joypad};
 use crate::ppu::{self, Ppu};
 use crate::serial::{self, Serial};
 use crate::timer::{self, Timer};
@@ -12,7 +13,6 @@ pub const INT_TIMER: u8 = 0x04;
 pub const INT_SERIAL: u8 = 0x08;
 pub const INT_JOYPAD: u8 = 0x10;
 
-const JOYP: u16 = 0xFF00;
 const DMA: u16 = 0xFF46;
 const OAM_LEN: u16 = 0xA0;
 
@@ -32,6 +32,7 @@ pub struct Bus {
     ppu: Ppu,
     timer: Timer,
     serial: Serial,
+    joypad: Joypad,
     wram: Box<[u8; 0x2000]>,
     hram: [u8; 0x7F],
     /// 아직 구현하지 않은 I/O 레지스터(0xFF00–0xFF7F)는 쓴 값을 그대로 보관한다.
@@ -52,6 +53,7 @@ impl Bus {
             // mooneye boot_div-dmgABCmgb로 맞춘 값: PC=0x0100에서 DIV 내부 카운터 위상.
             timer: Timer::new(0xABC8),
             serial: Serial::default(),
+            joypad: Joypad::default(),
             wram: Box::new([0; 0x2000]),
             hram: [0; 0x7F],
             io: [0xFF; 0x80],
@@ -64,6 +66,15 @@ impl Bus {
 
     pub fn cartridge(&self) -> &Cartridge {
         &self.cart
+    }
+
+    pub fn cartridge_mut(&mut self) -> &mut Cartridge {
+        &mut self.cart
+    }
+
+    pub fn set_button(&mut self, button: Button, pressed: bool) {
+        let irq = self.joypad.set_button(button, pressed);
+        self.request(INT_JOYPAD, irq);
     }
 
     pub fn serial_output(&self) -> &[u8] {
@@ -101,8 +112,7 @@ impl Bus {
 
     fn read_io(&self, addr: u16) -> u8 {
         match addr {
-            // 버튼 입력은 M4에서 구현한다. 지금은 아무 버튼도 눌리지 않은 상태다.
-            JOYP => 0xC0 | (self.io[0] & 0x30) | 0x0F,
+            joypad::P1 => self.joypad.read(),
             serial::SB | serial::SC => self.serial.read(addr),
             timer::DIV..=timer::TAC => self.timer.read(addr),
             IF_ADDR => self.if_ | 0xE0,
@@ -114,6 +124,10 @@ impl Bus {
 
     fn write_io(&mut self, addr: u16, value: u8) {
         match addr {
+            joypad::P1 => {
+                let irq = self.joypad.write(value);
+                self.request(INT_JOYPAD, irq);
+            }
             serial::SB | serial::SC => {
                 let irq = self.serial.write(addr, value);
                 self.request(INT_SERIAL, irq);
@@ -287,8 +301,8 @@ mod tests {
     #[test]
     fn joypad_reports_no_buttons() {
         let mut b = bus();
-        b.write(JOYP, 0x20);
-        assert_eq!(b.read(JOYP), 0xEF);
+        b.write(joypad::P1, 0x20);
+        assert_eq!(b.read(joypad::P1), 0xEF);
     }
 
     #[test]
@@ -395,5 +409,15 @@ mod tests {
         assert_eq!(b.read(timer::DIV), 0xAB);
         b.tick();
         assert_eq!(b.read(timer::DIV), 0xAC);
+    }
+
+    #[test]
+    fn pressed_button_requests_joypad_interrupt() {
+        let mut b = bus();
+        b.write(IF_ADDR, 0);
+        b.write(joypad::P1, 0x10);
+        b.set_button(Button::A, true);
+        assert_eq!(b.read(IF_ADDR) & INT_JOYPAD, INT_JOYPAD);
+        assert_eq!(b.read(joypad::P1) & 0x0F, 0x0E);
     }
 }
