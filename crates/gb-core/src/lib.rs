@@ -5,6 +5,7 @@
 pub mod cartridge;
 pub mod cpu;
 mod model;
+pub mod timer;
 
 pub use cartridge::{CartError, Header};
 pub use cpu::{IllegalOpcode, Registers};
