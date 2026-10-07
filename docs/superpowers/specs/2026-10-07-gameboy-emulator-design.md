@@ -11,7 +11,7 @@
 ### 1.2 대상 게임
 | 게임 | 기기 | MBC | 추가 요구 |
 |---|---|---|---|
-| 포켓몬 레드/블루/그린 | DMG | MBC1 (그린: MBC3) | 배터리 세이브 |
+| 포켓몬 레드/블루/그린 | DMG | MBC3 (북미판 레드/블루 기준, 판본에 따라 MBC1) | 배터리 세이브 |
 | 포켓몬 피카츄(옐로) | DMG (CGB 컬러 지원) | MBC5 | 피카츄 음성(CH3) |
 | 포켓몬 금/은 | DMG + CGB 겸용 | MBC3 + RTC | RTC |
 | 포켓몬 크리스탈 | CGB 전용 | MBC3 + RTC | CGB 기능 전체 |
@@ -237,7 +237,7 @@ fn decide(current: &Version, policy: &UpdatePolicy, prefs: &UpdatePrefs) -> Upda
 2. **포트 가짜 구현 테스트**: 세션(배터리 세이브 저장 시점, 백업), 업데이트 흐름 상태 전이.
 3. **테스트 ROM 통합 테스트**:
    - Blargg: 시리얼 출력(0xFF01/0xFF02)에서 `"Passed"` 확인
-   - mooneye: 종료 시 B,C,D,E,H,L = 3,5,8,13,21,34 확인
+   - mooneye: 종료 시 시리얼로 보내는 3,5,8,13,21,34(통과) / 0x42×6(실패) 확인 (레지스터 B,C,D,E,H,L과 같은 값)
    - dmg-acid2 / cgb-acid2: 프레임버퍼를 기준 PNG와 픽셀 단위 비교
    - ROM은 `scripts/fetch-test-roms.sh`로 내려받는다. 없으면 테스트를 건너뛰고 경고를 출력한다. CI에서는 반드시 내려받아 실행한다.
 4. **수동 체크리스트** (상용 ROM은 저장소에 넣지 않는다):
@@ -250,9 +250,9 @@ fn decide(current: &Version, policy: &UpdatePolicy, prefs: &UpdatePrefs) -> Upda
 ## 9. 마일스톤
 0. **걸어다니는 뼈대**: 3계층 워크스페이스, 빈 eframe 창, CI, 릴리스 CI(Velopack), 정책 서명, 강제/소프트/자동 업데이트
 1. CPU + 버스 → Blargg `cpu_instrs` (헤드리스)
-2. 타이머, 인터럽트, HALT → `instr_timing`, `mem_timing`
-3. PPU + 화면 출력 → `dmg-acid2`, 레드/블루 화면
-4. MBC1/3/5, 입력, 배터리 세이브 → 레드/블루/피카츄 플레이
+2. 타이머, 인터럽트, HALT, OAM DMA → `instr_timing`, `mem_timing`, mooneye 타이머·인터럽트·DMA 테스트
+3. PPU + 화면 출력 + MBC1/3/5 ROM·RAM 뱅크 전환 → `dmg-acid2`, 레드/블루 화면
+4. 입력, 배터리 세이브 → 레드/블루/피카츄 플레이
 5. APU + cpal → 사운드 (`dmg_sound`)
 6. CGB 기능 + RTC → `cgb-acid2`, `cgb_sound`, 금/은/크리스탈
 7. 세이브 스테이트, 배속/일시정지, 키 설정, 게임패드
