@@ -1,0 +1,8 @@
+[workspace]
+resolver = "3"
+members = ["crates/gb-core", "crates/aragorn-app"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
