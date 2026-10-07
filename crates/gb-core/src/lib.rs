@@ -1,3 +1,8 @@
 //! Game Boy / Game Boy Color 에뮬레이션 코어.
 //!
-//! UI, OS, 네트워크에 의존하지 않는다. 하드웨어 구현은 마일스톤 1부터 추가한다.
+//! UI, OS, 네트워크에 의존하지 않는다. 이름은 Pan Docs 용어를 따른다.
+
+pub mod cpu;
+mod model;
+
+pub use model::Model;
