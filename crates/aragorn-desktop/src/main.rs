@@ -37,6 +37,9 @@ fn main() -> eframe::Result {
         None => (None, None, None),
     };
 
+    // `aragorn <ROM 경로>`로 실행하면 바로 그 ROM을 연다.
+    let initial_rom = std::env::args_os().nth(1).map(PathBuf::from);
+
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title(format!("Aragorn v{}", build_info::current_version()))
@@ -53,6 +56,7 @@ fn main() -> eframe::Result {
                 source,
                 updater,
                 release_page,
+                initial_rom,
             };
             Ok(Box::new(AragornApp::new(&cc.egui_ctx, deps)))
         }),
