@@ -2,8 +2,10 @@
 //!
 //! UI, OS, 네트워크에 의존하지 않는다. 이름은 Pan Docs 용어를 따른다.
 
+pub mod cartridge;
 pub mod cpu;
 mod model;
 
+pub use cartridge::{CartError, Header};
 pub use cpu::{IllegalOpcode, Registers};
 pub use model::Model;
