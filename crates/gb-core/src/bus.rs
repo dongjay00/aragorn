@@ -103,7 +103,7 @@ impl Bus {
             timer::DIV..=timer::TAC => self.timer.read(addr),
             IF_ADDR => self.if_ | 0xE0,
             DMA => self.dma.reg,
-            ppu::LCDC | ppu::LY => self.ppu.read_reg(addr),
+            ppu::LCDC..=ppu::LYC | ppu::BGP..=ppu::WX => self.ppu.read_reg(addr),
             _ => self.io[usize::from(addr - 0xFF00)],
         }
     }
@@ -120,7 +120,10 @@ impl Bus {
                 self.dma.reg = value;
                 self.dma.starting = Some((2, u16::from(value) << 8));
             }
-            ppu::LCDC | ppu::LY => self.ppu.write_reg(addr, value),
+            ppu::LCDC..=ppu::LYC | ppu::BGP..=ppu::WX => {
+                let irq = self.ppu.write_reg(addr, value);
+                self.if_ |= irq;
+            }
             _ => self.io[usize::from(addr - 0xFF00)] = value,
         }
     }
@@ -186,8 +189,7 @@ impl CpuBus for Bus {
         self.tick_dma();
         let timer_irq = self.timer.tick();
         self.request(INT_TIMER, timer_irq);
-        let vblank_irq = self.ppu.tick(4);
-        self.request(INT_VBLANK, vblank_irq);
+        self.if_ |= self.ppu.tick(4);
     }
 }
 

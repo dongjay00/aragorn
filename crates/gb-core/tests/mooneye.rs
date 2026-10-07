@@ -121,4 +121,10 @@ mooneye_tests! {
     mbc5_rom_16mb => "emulator-only/mbc5/rom_16Mb.gb",
     mbc5_rom_32mb => "emulator-only/mbc5/rom_32Mb.gb",
     mbc5_rom_64mb => "emulator-only/mbc5/rom_64Mb.gb",
+    ppu_intr_1_2_timing => "acceptance/ppu/intr_1_2_timing-GS.gb",
+    ppu_intr_2_0_timing => "acceptance/ppu/intr_2_0_timing.gb",
+    ppu_intr_2_mode0_timing => "acceptance/ppu/intr_2_mode0_timing.gb",
+    ppu_intr_2_mode3_timing => "acceptance/ppu/intr_2_mode3_timing.gb",
+    ppu_stat_irq_blocking => "acceptance/ppu/stat_irq_blocking.gb",
+    ppu_vblank_stat_intr => "acceptance/ppu/vblank_stat_intr-GS.gb",
 }
