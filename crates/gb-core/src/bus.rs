@@ -25,6 +25,8 @@ pub struct Bus {
     io: [u8; 0x80],
     ie: u8,
     if_: u8,
+    /// 시작 후 진행한 M-사이클 수.
+    cycles: u64,
 }
 
 impl Bus {
@@ -40,6 +42,7 @@ impl Bus {
             io: [0xFF; 0x80],
             ie: 0x00,
             if_: INT_VBLANK,
+            cycles: 0,
         }
     }
 
@@ -49,6 +52,10 @@ impl Bus {
 
     pub fn serial_output(&self) -> &[u8] {
         self.serial.output()
+    }
+
+    pub fn cycles(&self) -> u64 {
+        self.cycles
     }
 
     pub fn take_frame_ready(&mut self) -> bool {
@@ -127,6 +134,7 @@ impl CpuBus for Bus {
     }
 
     fn tick(&mut self) {
+        self.cycles += 1;
         let timer_irq = self.timer.tick();
         self.request(INT_TIMER, timer_irq);
         let vblank_irq = self.ppu.tick(4);

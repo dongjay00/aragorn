@@ -4,6 +4,7 @@ use crate::bus::Bus;
 use crate::cartridge::{CartError, Cartridge, Header};
 use crate::cpu::{Cpu, IllegalOpcode, Registers};
 use crate::model::Model;
+use crate::ppu;
 
 pub struct GameBoy {
     cpu: Cpu,
@@ -36,11 +37,13 @@ impl GameBoy {
         self.cpu.step(&mut self.bus);
     }
 
-    /// 다음 VBlank 진입까지 실행한다. LCD가 꺼져 있으면 70224 T-사이클 뒤에 반환한다.
+    /// 다음 VBlank 진입까지 실행한다. 프레임 경계가 오지 않아도(LCD가 꺼져 있거나 게임이
+    /// LCD를 계속 껐다 켜는 경우) 한 프레임 분량(70224 T-사이클)이 지나면 반환한다.
     pub fn run_frame(&mut self) {
+        let deadline = self.bus.cycles() + u64::from(ppu::DOTS_PER_FRAME / 4);
         loop {
             self.cpu.step(&mut self.bus);
-            if self.bus.take_frame_ready() {
+            if self.bus.take_frame_ready() || self.bus.cycles() >= deadline {
                 return;
             }
         }
@@ -125,6 +128,14 @@ mod tests {
         gb.run_frame();
         assert_eq!(gb.debug().peek(0xFF40), 0x00);
         assert_eq!(gb.debug().peek(0xFF44), 0);
+    }
+
+    #[test]
+    fn run_frame_returns_when_lcd_toggles_every_frame() {
+        // XOR A ; LDH (0x40),A ; LD A,0x91 ; LDH (0x40),A ; JR -9
+        let mut gb = gb_with_program(&[0xAF, 0xE0, 0x40, 0x3E, 0x91, 0xE0, 0x40, 0x18, 0xF7]);
+        gb.run_frame();
+        gb.run_frame();
     }
 
     #[test]

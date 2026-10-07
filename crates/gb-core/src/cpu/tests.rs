@@ -370,3 +370,16 @@ fn locked_cpu_ignores_interrupts() {
     assert_eq!(cpu.regs.pc, 0x0101);
     assert!(cpu.lock().is_some());
 }
+
+#[test]
+fn ei_then_halt_with_pending_interrupt_returns_to_halt() {
+    // EI ; HALT, IE=IF=1, 핸들러 0x40은 INC B. 핸들러 첫 바이트가 두 번 실행되면 안 되고,
+    // 복귀 주소는 HALT(0x0101)여야 한다.
+    let (cpu, bus) = run(&[0xFB, 0x76, 0x00], 4, |_, b| {
+        b.mem[0xFFFF] = 0x01;
+        b.mem[0xFF0F] = 0x01;
+        b.mem[0x0040] = 0x04;
+    });
+    assert_eq!((cpu.regs.pc, cpu.regs.b), (0x0041, 1));
+    assert_eq!((bus.mem[0xCFFF], bus.mem[0xCFFE]), (0x01, 0x01));
+}

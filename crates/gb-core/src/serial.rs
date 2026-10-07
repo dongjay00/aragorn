@@ -6,6 +6,9 @@
 pub const SB: u16 = 0xFF01;
 pub const SC: u16 = 0xFF02;
 
+/// 보관하는 시리얼 출력의 최대 바이트 수. 넘치면 오래된 쪽부터 버린다.
+pub const OUTPUT_LIMIT: usize = 64 * 1024;
+
 #[derive(Debug, Clone, Default)]
 pub struct Serial {
     sb: u8,
@@ -31,6 +34,9 @@ impl Serial {
         if value & 0x81 != 0x81 {
             return false;
         }
+        if self.output.len() >= OUTPUT_LIMIT {
+            self.output.drain(..OUTPUT_LIMIT / 2);
+        }
         self.output.push(self.sb);
         self.sb = 0xFF;
         self.sc &= 0x7F;
@@ -54,6 +60,18 @@ mod tests {
         assert_eq!(s.output(), b"A");
         assert_eq!(s.read(SC) & 0x80, 0);
         assert_eq!(s.read(SB), 0xFF);
+    }
+
+    #[test]
+    fn output_buffer_is_bounded_and_keeps_latest_bytes() {
+        let mut s = Serial::default();
+        for i in 0..(OUTPUT_LIMIT * 3) {
+            s.write(SB, (i % 251) as u8);
+            s.write(SC, 0x81);
+        }
+        assert!(s.output().len() <= OUTPUT_LIMIT);
+        let last = ((OUTPUT_LIMIT * 3 - 1) % 251) as u8;
+        assert_eq!(s.output().last(), Some(&last));
     }
 
     #[test]

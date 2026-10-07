@@ -104,7 +104,13 @@ impl Cpu {
         let iflag = bus.read(IF_ADDR);
         bus.write(IF_ADDR, iflag & !(1 << bit));
         bus.tick();
-        let pc = self.regs.pc;
+        // EI 직후 HALT에서 HALT 버그가 걸린 채 디스패치되면, 핸들러는 HALT로 돌아온다.
+        let pc = if self.halt_bug {
+            self.halt_bug = false;
+            self.regs.pc.wrapping_sub(1)
+        } else {
+            self.regs.pc
+        };
         self.push16(bus, pc);
         self.regs.pc = 0x0040 + 8 * u16::from(bit);
         bus.tick();

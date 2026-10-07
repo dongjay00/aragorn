@@ -1,0 +1,2 @@
+# 셸 스크립트는 Windows(Git Bash)에서도 LF로 체크아웃해야 실행된다.
+*.sh text eol=lf
