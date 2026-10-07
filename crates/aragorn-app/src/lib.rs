@@ -1,3 +1,4 @@
 //! 유스케이스 계층: 세션, 설정, 업데이트 정책. 외부 세계와는 포트 trait으로만 대화한다.
 
+pub mod config;
 pub mod update;
