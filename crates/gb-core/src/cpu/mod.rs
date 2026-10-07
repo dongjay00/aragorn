@@ -68,20 +68,41 @@ impl Cpu {
     }
 
     /// 명령 하나, 인터럽트 디스패치 하나, 또는 HALT 대기 1 M-사이클을 실행한다.
+    ///
+    /// 인터럽트는 옵코드 fetch 사이클이 끝날 때 확인한다 (하드웨어의 fetch/실행 겹침).
+    /// 그 사이클 안에 켜진 IF도 보이고, 펜딩이면 읽은 옵코드는 버린다.
     pub fn step<B: CpuBus>(&mut self, bus: &mut B) {
         if self.lock.is_some() {
             bus.tick();
             return;
         }
-        if self.service_interrupt(bus) {
-            return;
-        }
         if self.halted {
+            // HALT 중에도 매 M-사이클이 fetch 사이클처럼 동작한다 (PC는 증가하지 않는다).
             bus.tick();
+            if pending_interrupts(bus) != 0 {
+                self.halted = false;
+                let pc = self.regs.pc;
+                if self.ime {
+                    self.dispatch(bus, pc);
+                } else {
+                    // 깨어난 사이클이 다음 명령의 fetch 사이클이다.
+                    let opcode = bus.read(pc);
+                    self.regs.pc = pc.wrapping_add(1);
+                    self.execute(bus, opcode);
+                }
+            }
             return;
         }
         let enable_ime = self.ime_pending;
+        let pc = self.regs.pc;
+        let halt_bug = self.halt_bug;
         let opcode = self.fetch8(bus);
+        if self.ime && pending_interrupts(bus) != 0 {
+            // EI 직후 HALT의 HALT 버그 상태였다면 핸들러는 HALT로 돌아온다.
+            let ret = if halt_bug { pc.wrapping_sub(1) } else { pc };
+            self.dispatch(bus, ret);
+            return;
+        }
         self.execute(bus, opcode);
         if enable_ime && self.ime_pending {
             self.ime = true;
@@ -89,32 +110,29 @@ impl Cpu {
         }
     }
 
-    /// 대기 중인 인터럽트가 있으면 HALT를 풀고, IME가 켜져 있으면 디스패치한다 (5 M-사이클).
-    fn service_interrupt<B: CpuBus>(&mut self, bus: &mut B) -> bool {
-        let pending = pending_interrupts(bus);
-        if pending == 0 {
-            return false;
-        }
-        self.halted = false;
-        if !self.ime {
-            return false;
-        }
+    /// fetch 사이클 뒤 남은 4 M-사이클: 내부 지연, PC 상위 바이트 push, 하위 바이트 push, 점프.
+    /// 벡터는 상위 바이트를 push한 뒤에 정한다. 그 push가 IE를 덮어써서 펜딩이 사라지면
+    /// 디스패치가 취소되어 PC=0x0000이 되고 IF는 그대로 남는다 (mooneye `ie_push`).
+    fn dispatch<B: CpuBus>(&mut self, bus: &mut B, ret: u16) {
+        // 직전 EI의 지연된 IME 켜기도 취소한다. 남아 있으면 핸들러 안에서 IME가 다시 켜진다.
         self.ime = false;
-        let bit = pending.trailing_zeros() as u8;
-        let iflag = bus.read(IF_ADDR);
-        bus.write(IF_ADDR, iflag & !(1 << bit));
+        self.ime_pending = false;
+        let [lo, hi] = ret.to_le_bytes();
         bus.tick();
-        // EI 직후 HALT에서 HALT 버그가 걸린 채 디스패치되면, 핸들러는 HALT로 돌아온다.
-        let pc = if self.halt_bug {
-            self.halt_bug = false;
-            self.regs.pc.wrapping_sub(1)
+        self.regs.sp = self.regs.sp.wrapping_sub(1);
+        write_cycle(bus, self.regs.sp, hi);
+        let pending = pending_interrupts(bus);
+        self.regs.sp = self.regs.sp.wrapping_sub(1);
+        write_cycle(bus, self.regs.sp, lo);
+        self.regs.pc = if pending == 0 {
+            0x0000
         } else {
-            self.regs.pc
+            let bit = pending.trailing_zeros() as u8;
+            let iflag = bus.read(IF_ADDR);
+            bus.write(IF_ADDR, iflag & !(1 << bit));
+            0x0040 + 8 * u16::from(bit)
         };
-        self.push16(bus, pc);
-        self.regs.pc = 0x0040 + 8 * u16::from(bit);
         bus.tick();
-        true
     }
 
     fn fetch8<B: CpuBus>(&mut self, bus: &mut B) -> u8 {

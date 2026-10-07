@@ -139,6 +139,15 @@ mod tests {
     }
 
     #[test]
+    fn halt_forever_does_not_hang_run_frame() {
+        // DI ; HALT, IE=0: 깨어날 수 없지만 프레임은 계속 진행해야 한다.
+        let mut gb = gb_with_program(&[0xF3, 0x76]);
+        gb.run_frame();
+        gb.run_frame();
+        assert_eq!(gb.debug().registers().pc, 0x0102);
+    }
+
+    #[test]
     fn illegal_opcode_does_not_hang_run_frame() {
         let mut gb = gb_with_program(&[0xD3]);
         gb.run_frame();
