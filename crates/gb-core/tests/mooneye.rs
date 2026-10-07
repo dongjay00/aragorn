@@ -52,6 +52,7 @@ macro_rules! mooneye_tests {
 mooneye_tests! {
     bits_mem_oam => "acceptance/bits/mem_oam.gb",
     bits_reg_f => "acceptance/bits/reg_f.gb",
+    boot_div_dmg_abc_mgb => "acceptance/boot_div-dmgABCmgb.gb",
     boot_regs_dmg_abc => "acceptance/boot_regs-dmgABC.gb",
     di_timing => "acceptance/di_timing-GS.gb",
     div_timing => "acceptance/div_timing.gb",

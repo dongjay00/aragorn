@@ -49,7 +49,8 @@ impl Bus {
         Self {
             cart,
             ppu: Ppu::default(),
-            timer: Timer::new(0xABCC),
+            // mooneye boot_div-dmgABCmgb로 맞춘 값: PC=0x0100에서 DIV 내부 카운터 위상.
+            timer: Timer::new(0xABC8),
             serial: Serial::default(),
             wram: Box::new([0; 0x2000]),
             hram: [0; 0x7F],
@@ -377,5 +378,16 @@ mod tests {
             b.tick();
         }
         assert_eq!(b.read(0xFE00), 0x77);
+    }
+
+    #[test]
+    fn post_boot_div_phase_matches_dmg() {
+        let mut b = bus();
+        for _ in 0..13 {
+            b.tick();
+        }
+        assert_eq!(b.read(timer::DIV), 0xAB);
+        b.tick();
+        assert_eq!(b.read(timer::DIV), 0xAC);
     }
 }
