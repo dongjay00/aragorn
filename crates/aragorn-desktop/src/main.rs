@@ -1,3 +1,6 @@
+// 릴리스 빌드에서는 Windows가 앱과 함께 콘솔 창을 띄우지 않게 한다. 개발 빌드는 로그를 보려고 콘솔을 유지한다.
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
 use aragorn_app::update::{UpdateSource, Updater};
 use aragorn_desktop::{
     adapters::{GithubPolicySource, TomlConfigStore, VelopackUpdater},
