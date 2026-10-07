@@ -12,13 +12,20 @@ pub struct Session {
 
 impl Session {
     pub fn load(rom: Vec<u8>) -> Result<Session, CartError> {
-        let gb = GameBoy::new(rom, Model::Auto)?;
+        // CGB 하드웨어(VRAM/WRAM 뱅크, 팔레트)는 M6에서 구현한다. 그 전까지 CGB 플래그가 있는 ROM을
+        // CGB 모드로 시작하면 화면과 메모리가 망가지므로 모두 DMG로 돌린다.
+        let gb = GameBoy::new(rom, Model::Dmg)?;
         let title = gb.header().title.trim().to_string();
         Ok(Session {
             gb,
             pacer: FramePacer::default(),
             title,
         })
+    }
+
+    /// 실제로 에뮬레이션하는 기기.
+    pub fn model(&self) -> Model {
+        self.gb.model()
     }
 
     pub fn title(&self) -> &str {
@@ -58,6 +65,20 @@ mod tests {
         let session = Session::load(looping_rom()).unwrap();
         assert_eq!(session.title(), "ARAGORN TEST");
         assert_eq!(session.framebuffer().len(), 160 * 144);
+    }
+
+    #[test]
+    fn cgb_flagged_rom_runs_as_dmg_until_cgb_support() {
+        // 노랑·금·은처럼 CGB 플래그가 있는 ROM도 CGB 하드웨어(M6)가 생기기 전까지는 DMG로 돌린다.
+        for flag in [0x80, 0xC0] {
+            let mut rom = looping_rom();
+            rom[0x0143] = flag;
+            assert_eq!(
+                Session::load(rom).unwrap().model(),
+                Model::Dmg,
+                "{flag:#04X}"
+            );
+        }
     }
 
     #[test]
