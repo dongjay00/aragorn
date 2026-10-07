@@ -26,6 +26,8 @@ pub struct Session {
     idle_frames: u32,
     /// 직전 저장이 실패했는지. 실패하면 `SAVE_IDLE_FRAMES`마다 다시 시도한다.
     save_failed: bool,
+    /// 기존 세이브를 읽지 못했으면 덮어쓰지 않는다. 새 게임으로 덮으면 원래 진행이 사라진다.
+    store_blocked: bool,
     /// 상태 표시줄에 보일 오류 문구.
     errors: Vec<String>,
 }
@@ -43,11 +45,23 @@ impl Session {
         let mut gb = GameBoy::new(rom, Model::Dmg)?;
         let title = gb.header().title.trim().to_string();
         let mut errors = Vec::new();
-        if gb.battery_ram().is_some() {
+        let mut store_blocked = false;
+        if let Some(ram_len) = gb.battery_ram().map(|ram| ram.len()) {
             match store.load_battery() {
-                Ok(Some(data)) => gb.load_battery_ram(&data, now_unix),
+                Ok(Some(data)) => {
+                    if data.len() < ram_len {
+                        errors.push(format!(
+                            "세이브 파일이 카트리지 RAM보다 작습니다 ({}/{ram_len}바이트). 앞부분만 불러왔습니다",
+                            data.len()
+                        ));
+                    }
+                    gb.load_battery_ram(&data, now_unix);
+                }
                 Ok(None) => {}
-                Err(e) => errors.push(format!("세이브 파일을 읽을 수 없습니다: {e}")),
+                Err(e) => {
+                    errors.push(format!("세이브 파일을 읽을 수 없습니다: {e}"));
+                    store_blocked = true;
+                }
             }
         }
         Ok(Session {
@@ -58,6 +72,7 @@ impl Session {
             unsaved: false,
             idle_frames: 0,
             save_failed: false,
+            store_blocked,
             errors,
         })
     }
@@ -95,10 +110,12 @@ impl Session {
     }
 
     /// 저장하지 않은 세이브가 있으면 지금 저장한다. 앱 종료, ROM 교체, 업데이트 적용 전에 부른다.
-    pub fn flush(&mut self) {
+    /// 저장하지 못한 진행이 남아 있으면 `false`.
+    pub fn flush(&mut self) -> bool {
         if self.unsaved {
             self.save_battery();
         }
+        !self.unsaved
     }
 
     /// 쌓인 오류 문구를 꺼낸다.
@@ -126,6 +143,15 @@ impl Session {
             self.unsaved = false;
             return;
         };
+        if self.store_blocked {
+            if !self.save_failed {
+                self.errors
+                    .push("기존 세이브를 보호하려고 이번 실행에서는 저장하지 않습니다".to_string());
+            }
+            self.save_failed = true;
+            self.idle_frames = 0;
+            return;
+        }
         match self.store.save_battery(&ram) {
             Ok(()) => {
                 self.unsaved = false;
@@ -340,5 +366,48 @@ mod tests {
         assert_eq!(store.save_attempts.get(), 2);
         assert!(session.take_errors().is_empty());
         assert_eq!(store.data.borrow().as_ref().unwrap()[0], 0x42);
+    }
+
+    #[test]
+    fn unreadable_save_is_never_overwritten() {
+        // 읽지 못한 세이브를 새 게임으로 덮어쓰면 원래 진행이 .sav와 .sav.bak 모두에서 사라진다.
+        let store = MemoryStore {
+            fail_load: true,
+            ..MemoryStore::default()
+        };
+        let (mut session, store) = session_with(saving_rom(true), store);
+        session.take_errors();
+        run_frames(&mut session, SAVE_IDLE_FRAMES * 3);
+        assert!(!session.flush());
+        assert_eq!(store.save_attempts.get(), 0);
+        assert_eq!(
+            session.take_errors(),
+            ["기존 세이브를 보호하려고 이번 실행에서는 저장하지 않습니다"]
+        );
+    }
+
+    #[test]
+    fn short_save_file_is_reported() {
+        let store = MemoryStore {
+            data: RefCell::new(Some(vec![0x11; 100])),
+            ..MemoryStore::default()
+        };
+        let (mut session, _) = session_with(saving_rom(true), store);
+        assert_eq!(
+            session.take_errors(),
+            ["세이브 파일이 카트리지 RAM보다 작습니다 (100/8192바이트). 앞부분만 불러왔습니다"]
+        );
+    }
+
+    #[test]
+    fn flush_reports_whether_progress_is_safe() {
+        let (mut session, _) = session_with(saving_rom(false), MemoryStore::default());
+        run_frames(&mut session, 1);
+        assert!(session.flush());
+        let store = MemoryStore::default();
+        store.fail_save.set(true);
+        let (mut session, _) = session_with(saving_rom(false), store);
+        run_frames(&mut session, 1);
+        assert!(!session.flush());
     }
 }

@@ -65,6 +65,8 @@ pub struct UpdateFlow {
     state: UpdateState,
     /// 마지막으로 서명 검증된 정책이 지정한 패키지 (재시도에도 쓴다)
     target: Option<PackageSpec>,
+    /// 재시작을 요청해 업데이트 적용을 기다리는 중. 직전에 저장한 세이브 뒤로 게임이 진행되지 않게 멈춘다.
+    restarting: bool,
 }
 
 impl UpdateFlow {
@@ -75,6 +77,7 @@ impl UpdateFlow {
             updater_available,
             state: UpdateState::Idle,
             target: None,
+            restarting: false,
         }
     }
 
@@ -96,13 +99,14 @@ impl UpdateFlow {
 
     /// 강제 업데이트가 끝나기 전까지 게임을 진행하면 안 되는 상태인가.
     pub fn blocks_emulation(&self) -> bool {
-        matches!(
-            self.state,
-            UpdateState::Forced { .. }
-                | UpdateState::Downloading { forced: true, .. }
-                | UpdateState::ReadyToRestart { forced: true, .. }
-                | UpdateState::Failed { forced: true, .. }
-        )
+        self.restarting
+            || matches!(
+                self.state,
+                UpdateState::Forced { .. }
+                    | UpdateState::Downloading { forced: true, .. }
+                    | UpdateState::ReadyToRestart { forced: true, .. }
+                    | UpdateState::Failed { forced: true, .. }
+            )
     }
 
     pub fn handle(&mut self, event: UpdateEvent) -> Vec<UpdateCommand> {
@@ -185,12 +189,14 @@ impl UpdateFlow {
             }
             UpdateEvent::RestartNow => {
                 if matches!(self.state, S::ReadyToRestart { .. }) {
+                    self.restarting = true;
                     vec![UpdateCommand::ApplyAndRestart]
                 } else {
                     vec![]
                 }
             }
             UpdateEvent::ApplyFailed(error) => {
+                self.restarting = false;
                 let S::ReadyToRestart { version, forced } = self.state.clone() else {
                     return vec![];
                 };
@@ -479,6 +485,22 @@ mod tests {
         checked(&mut f, "1.1.0", "1.0.0");
         f.handle(E::DownloadFinished(Ok(())));
         assert_eq!(f.handle(E::RestartNow), vec![C::ApplyAndRestart]);
+    }
+
+    #[test]
+    fn restarting_blocks_emulation_until_apply_fails() {
+        let mut f = flow(true, true);
+        checked(&mut f, "1.1.0", "1.0.0");
+        f.handle(E::UpdateNow);
+        f.handle(E::DownloadFinished(Ok(())));
+        assert!(!f.blocks_emulation());
+        f.handle(E::RestartNow);
+        assert!(
+            f.blocks_emulation(),
+            "재시작 직전 저장한 세이브 뒤로 게임이 진행되면 안 된다"
+        );
+        f.handle(E::ApplyFailed(UpdateError::Apply("x".into())));
+        assert!(!f.blocks_emulation());
     }
 
     #[test]

@@ -51,6 +51,20 @@ fn now_unix() -> u64 {
         .map_or(0, |d| d.as_secs())
 }
 
+/// 저장하지 못한 진행이 있을 때 ROM 교체·종료를 계속할지 정한다.
+/// 처음에는 멈추고 경고하며, 사용자가 같은 동작을 한 번 더 하면 저장 없이 진행한다.
+pub fn proceed_after_flush(flushed: bool, warned: &mut bool) -> bool {
+    if flushed || *warned {
+        *warned = false;
+        return true;
+    }
+    *warned = true;
+    false
+}
+
+const UNSAVED_WARNING: &str =
+    "세이브를 저장하지 못했습니다. 한 번 더 하면 저장하지 않고 진행합니다";
+
 pub struct AragornApp {
     flow: UpdateFlow,
     worker: Option<UpdateWorker>,
@@ -65,6 +79,8 @@ pub struct AragornApp {
     last_tick: Instant,
     /// ROM 로드 결과 등 상태 표시줄에 보일 문구
     notice: Option<String>,
+    /// 세이브 저장 실패를 이미 경고했는지 (`proceed_after_flush`)
+    unsaved_warned: bool,
 }
 
 impl AragornApp {
@@ -98,6 +114,7 @@ impl AragornApp {
             screen: ScreenView::default(),
             last_tick: Instant::now(),
             notice: None,
+            unsaved_warned: false,
         };
         if app.worker.is_some() {
             app.dispatch(UpdateEvent::CheckRequested);
@@ -109,7 +126,11 @@ impl AragornApp {
     }
 
     fn open_rom(&mut self, ctx: &egui::Context, path: &Path) {
-        self.flush_session();
+        let flushed = self.flush_session();
+        if !proceed_after_flush(flushed, &mut self.unsaved_warned) {
+            self.notice = Some(UNSAVED_WARNING.to_string());
+            return;
+        }
         match load_session(path, now_unix()) {
             Ok(session) => {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Title(format!(
@@ -138,7 +159,8 @@ impl AragornApp {
         let Some(session) = &mut self.session else {
             return;
         };
-        if self.flow.blocks_emulation() {
+        // 종료 중에는 마지막 저장 뒤로 게임이 진행되지 않게 멈춘다.
+        if self.exit_handled || self.flow.blocks_emulation() {
             return;
         }
         for (button, pressed) in input::button_states(|key| ctx.input(|i| i.key_down(key))) {
@@ -151,12 +173,11 @@ impl AragornApp {
         ctx.request_repaint();
     }
 
-    /// 저장하지 않은 배터리 세이브를 디스크에 쓴다.
-    fn flush_session(&mut self) {
-        if let Some(session) = &mut self.session {
-            session.flush();
-        }
+    /// 저장하지 않은 배터리 세이브를 디스크에 쓴다. 저장하지 못한 진행이 남아 있으면 `false`.
+    fn flush_session(&mut self) -> bool {
+        let flushed = self.session.as_mut().is_none_or(Session::flush);
         self.collect_session_errors();
+        flushed
     }
 
     /// 세션의 세이브 오류를 로그와 상태 표시줄로 옮긴다.
@@ -224,9 +245,14 @@ impl eframe::App for AragornApp {
             }
         }
         if ctx.input(|i| i.viewport().close_requested()) && !self.exit_handled {
-            self.exit_handled = true;
-            self.flush_session();
-            events.push(UpdateEvent::AppExiting);
+            let flushed = self.flush_session();
+            if proceed_after_flush(flushed, &mut self.unsaved_warned) {
+                self.exit_handled = true;
+                events.push(UpdateEvent::AppExiting);
+            } else {
+                ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+                self.notice = Some(UNSAVED_WARNING.to_string());
+            }
         }
         for event in events {
             self.dispatch(event);
@@ -360,5 +386,22 @@ mod tests {
 
         let reloaded = load_session(&path, 0).unwrap();
         assert_eq!(reloaded.battery_ram().unwrap()[0], 0x42);
+    }
+
+    #[test]
+    fn failed_save_warns_once_before_discarding() {
+        let mut warned = false;
+        assert!(proceed_after_flush(true, &mut warned));
+        assert!(
+            !proceed_after_flush(false, &mut warned),
+            "처음에는 멈추고 알린다"
+        );
+        assert!(warned);
+        assert!(
+            proceed_after_flush(false, &mut warned),
+            "한 번 더 하면 저장 없이 진행한다"
+        );
+        assert!(proceed_after_flush(true, &mut warned));
+        assert!(!warned, "저장에 성공하면 경고 상태를 지운다");
     }
 }
