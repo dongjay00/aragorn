@@ -114,7 +114,9 @@ impl Cpu {
     /// 벡터는 상위 바이트를 push한 뒤에 정한다. 그 push가 IE를 덮어써서 펜딩이 사라지면
     /// 디스패치가 취소되어 PC=0x0000이 되고 IF는 그대로 남는다 (mooneye `ie_push`).
     fn dispatch<B: CpuBus>(&mut self, bus: &mut B, ret: u16) {
+        // 직전 EI의 지연된 IME 켜기도 취소한다. 남아 있으면 핸들러 안에서 IME가 다시 켜진다.
         self.ime = false;
+        self.ime_pending = false;
         let [lo, hi] = ret.to_le_bytes();
         bus.tick();
         self.regs.sp = self.regs.sp.wrapping_sub(1);

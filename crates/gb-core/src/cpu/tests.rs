@@ -453,3 +453,16 @@ fn halt_without_ime_wakes_and_executes_in_the_same_cycle() {
         (1, 0x0102, false, 2)
     );
 }
+
+#[test]
+fn dispatch_right_after_ei_keeps_ime_off_in_handler() {
+    // IME=1에서 EI ; NOP. NOP의 fetch 사이클에 인터럽트가 디스패치되면 EI의 지연된 IME 켜기는
+    // 사라져야 한다. 핸들러 첫 명령 뒤에도 IME=0이어야 중첩 인터럽트가 생기지 않는다.
+    let (cpu, _) = run(&[0xFB, 0x00], 3, |c, b| {
+        c.ime = true;
+        b.mem[0xFFFF] = 0x04;
+        b.irq_at = Some((2, 0x04));
+    });
+    assert_eq!(cpu.regs.pc, 0x0051);
+    assert!(!cpu.ime());
+}
