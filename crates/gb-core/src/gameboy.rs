@@ -102,8 +102,8 @@ mod tests {
     #[test]
     fn unsupported_cartridge_is_an_error() {
         assert_eq!(
-            GameBoy::new(test_rom(0x13, 0x00, 0x00), Model::Auto).err(),
-            Some(CartError::Unsupported(0x13))
+            GameBoy::new(test_rom(0x05, 0x00, 0x00), Model::Auto).err(),
+            Some(CartError::Unsupported(0x05))
         );
     }
 
