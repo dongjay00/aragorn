@@ -329,9 +329,11 @@ impl Ppu {
     fn render_sprites(&mut self, y: usize, bg_color: &[u8; SCREEN_WIDTH]) {
         let height = if self.lcdc & 0x04 != 0 { 16 } else { 8 };
         // 줄당 최대 10개, OAM 순서대로 고른다.
-        let mut sprites: Vec<(usize, &[u8])> = self
+        let mut sprites: Vec<(usize, &[u8; 4])> = self
             .oam
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .enumerate()
             .filter(|(_, s)| {
                 let top = i32::from(s[0]) - 16;
