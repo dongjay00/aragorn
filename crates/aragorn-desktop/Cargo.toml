@@ -1,0 +1,27 @@
+[package]
+name = "aragorn-desktop"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+name = "aragorn_desktop"
+path = "src/lib.rs"
+
+[[bin]]
+name = "aragorn"
+path = "src/main.rs"
+
+[dependencies]
+aragorn-app = { path = "../aragorn-app" }
+directories = "6"
+eframe = "0.36.2"
+env_logger = "0.11"
+log = "0.4"
+semver = "1"
+toml = "0.8"
+ureq = "2"
+velopack = "1.2.161"
+
+[dev-dependencies]
+tempfile = "3"
