@@ -74,6 +74,10 @@ impl Bus {
         self.cycles
     }
 
+    pub fn ppu(&self) -> &Ppu {
+        &self.ppu
+    }
+
     pub fn take_frame_ready(&mut self) -> bool {
         self.ppu.take_frame_ready()
     }

@@ -56,6 +56,31 @@ for entry in "${FILES[@]}"; do
 done
 echo "Blargg 테스트 ROM 준비 완료: $DEST"
 
+# dmg-acid2 (MIT): ROM과 기준 스크린샷
+ACID2_DEST="$ROOT/tests/roms/dmg-acid2"
+ACID2_FILES=(
+  "https://github.com/mattcurrie/dmg-acid2/releases/download/v1.0/dmg-acid2.gb|dmg-acid2.gb|464e14b7d42e7feea0b7ede42be7071dc88913f75b9ffa444299424b63d1dff1"
+  "https://raw.githubusercontent.com/mattcurrie/dmg-acid2/8a98ce731f96dde032ffb22ec36dc985d78fdb18/img/reference-dmg.png|reference-dmg.png|ca966d50895c7efef05838590d148c2cbfd7fba57dab986f25b35b4da71abb57"
+)
+mkdir -p "$ACID2_DEST"
+for entry in "${ACID2_FILES[@]}"; do
+  IFS='|' read -r url name expected <<< "$entry"
+  out="$ACID2_DEST/$name"
+  if [[ -f "$out" && "$(sha256 "$out")" == "$expected" ]]; then
+    continue
+  fi
+  curl -sfL --retry 3 -o "$out.tmp" "$url"
+  actual="$(sha256 "$out.tmp")"
+  if [[ "$actual" != "$expected" ]]; then
+    rm -f "$out.tmp"
+    echo "SHA256 불일치: $name ($actual)" >&2
+    exit 1
+  fi
+  mv "$out.tmp" "$out"
+  echo "내려받음: dmg-acid2/$name"
+done
+echo "dmg-acid2 준비 완료: $ACID2_DEST"
+
 # mooneye-test-suite 공식 배포본 (MIT)
 MTS_NAME="mts-20240926-1737-443f6e1"
 MTS_URL="https://gekkio.fi/files/mooneye-test-suite/$MTS_NAME/$MTS_NAME.tar.gz"

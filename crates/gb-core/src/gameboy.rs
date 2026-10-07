@@ -49,6 +49,11 @@ impl GameBoy {
         }
     }
 
+    /// 160×144, 각 픽셀은 0xRRGGBBAA.
+    pub fn framebuffer(&self) -> &[u32] {
+        self.bus.ppu().framebuffer()
+    }
+
     pub fn debug(&self) -> DebugView<'_> {
         DebugView { gb: self }
     }
