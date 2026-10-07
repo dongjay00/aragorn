@@ -96,10 +96,7 @@ impl Bus {
                 let irq = self.serial.write(addr, value);
                 self.request(INT_SERIAL, irq);
             }
-            timer::DIV..=timer::TAC => {
-                let irq = self.timer.write(addr, value);
-                self.request(INT_TIMER, irq);
-            }
+            timer::DIV..=timer::TAC => self.timer.write(addr, value),
             IF_ADDR => self.if_ = value & 0x1F,
             ppu::LCDC | ppu::LY => self.ppu.write_reg(addr, value),
             _ => self.io[usize::from(addr - 0xFF00)] = value,

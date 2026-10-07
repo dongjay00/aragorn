@@ -79,4 +79,7 @@ mooneye_tests! {
     timer_tim10_div_trigger => "acceptance/timer/tim10_div_trigger.gb",
     timer_tim11 => "acceptance/timer/tim11.gb",
     timer_tim11_div_trigger => "acceptance/timer/tim11_div_trigger.gb",
+    timer_tima_reload => "acceptance/timer/tima_reload.gb",
+    timer_tima_write_reloading => "acceptance/timer/tima_write_reloading.gb",
+    timer_tma_write_reloading => "acceptance/timer/tma_write_reloading.gb",
 }
