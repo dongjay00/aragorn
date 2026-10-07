@@ -13,6 +13,19 @@ pub const INT_SERIAL: u8 = 0x08;
 pub const INT_JOYPAD: u8 = 0x10;
 
 const JOYP: u16 = 0xFF00;
+const DMA: u16 = 0xFF46;
+const OAM_LEN: u16 = 0xA0;
+
+/// OAM DMA (Pan Docs "OAM DMA Transfer").
+#[derive(Debug, Clone, Default)]
+struct OamDma {
+    /// 마지막으로 쓴 FF46 값.
+    reg: u8,
+    /// FF46 쓰기 후 시작까지 남은 M-사이클과 출발지. 진행 중인 전송은 시작할 때까지 계속된다.
+    starting: Option<(u8, u16)>,
+    /// 진행 중인 전송의 (출발지, 다음 바이트 번호). `Some`인 동안 CPU는 OAM에 접근할 수 없다.
+    active: Option<(u16, u16)>,
+}
 
 pub struct Bus {
     cart: Cartridge,
@@ -25,6 +38,7 @@ pub struct Bus {
     io: [u8; 0x80],
     ie: u8,
     if_: u8,
+    dma: OamDma,
     /// 시작 후 진행한 M-사이클 수.
     cycles: u64,
 }
@@ -42,6 +56,7 @@ impl Bus {
             io: [0xFF; 0x80],
             ie: 0x00,
             if_: INT_VBLANK,
+            dma: OamDma::default(),
             cycles: 0,
         }
     }
@@ -70,6 +85,7 @@ impl Bus {
             0xA000..=0xBFFF => self.cart.read_ram(addr),
             0xC000..=0xDFFF => self.wram[usize::from(addr - 0xC000)],
             0xE000..=0xFDFF => self.wram[usize::from(addr - 0xE000)],
+            0xFE00..=0xFE9F if self.dma.active.is_some() => 0xFF,
             0xFE00..=0xFE9F => self.ppu.read_oam(addr),
             0xFEA0..=0xFEFF => 0x00,
             0xFF00..=0xFF7F => self.read_io(addr),
@@ -85,6 +101,7 @@ impl Bus {
             serial::SB | serial::SC => self.serial.read(addr),
             timer::DIV..=timer::TAC => self.timer.read(addr),
             IF_ADDR => self.if_ | 0xE0,
+            DMA => self.dma.reg,
             ppu::LCDC | ppu::LY => self.ppu.read_reg(addr),
             _ => self.io[usize::from(addr - 0xFF00)],
         }
@@ -98,8 +115,40 @@ impl Bus {
             }
             timer::DIV..=timer::TAC => self.timer.write(addr, value),
             IF_ADDR => self.if_ = value & 0x1F,
+            DMA => {
+                self.dma.reg = value;
+                self.dma.starting = Some((2, u16::from(value) << 8));
+            }
             ppu::LCDC | ppu::LY => self.ppu.write_reg(addr, value),
             _ => self.io[usize::from(addr - 0xFF00)] = value,
+        }
+    }
+
+    /// DMA가 출발지에서 읽는 값. 0xE000 이상은 WRAM 에코로 본다.
+    fn dma_source_read(&self, addr: u16) -> u8 {
+        match addr {
+            0x0000..=0x7FFF => self.cart.read_rom(addr),
+            0x8000..=0x9FFF => self.ppu.read_vram(addr),
+            0xA000..=0xBFFF => self.cart.read_ram(addr),
+            0xC000..=0xDFFF => self.wram[usize::from(addr - 0xC000)],
+            _ => self.wram[usize::from((addr - 0xE000) & 0x1FFF)],
+        }
+    }
+
+    /// 진행 중인 전송은 M-사이클마다 1바이트를 옮긴다. FF46 쓰기 후 2번째 M-사이클에 새 전송이 시작된다.
+    fn tick_dma(&mut self) {
+        if let Some((source, index)) = self.dma.active {
+            let byte = self.dma_source_read(source.wrapping_add(index));
+            self.ppu.write_oam(0xFE00 + index, byte);
+            self.dma.active = (index + 1 < OAM_LEN).then_some((source, index + 1));
+        }
+        if let Some((delay, source)) = self.dma.starting {
+            if delay <= 1 {
+                self.dma.starting = None;
+                self.dma.active = Some((source, 0));
+            } else {
+                self.dma.starting = Some((delay - 1, source));
+            }
         }
     }
 
@@ -122,6 +171,7 @@ impl CpuBus for Bus {
             0xA000..=0xBFFF => self.cart.write_ram(addr, value),
             0xC000..=0xDFFF => self.wram[usize::from(addr - 0xC000)] = value,
             0xE000..=0xFDFF => self.wram[usize::from(addr - 0xE000)] = value,
+            0xFE00..=0xFE9F if self.dma.active.is_some() => {}
             0xFE00..=0xFE9F => self.ppu.write_oam(addr, value),
             0xFEA0..=0xFEFF => {}
             0xFF00..=0xFF7F => self.write_io(addr, value),
@@ -132,6 +182,7 @@ impl CpuBus for Bus {
 
     fn tick(&mut self) {
         self.cycles += 1;
+        self.tick_dma();
         let timer_irq = self.timer.tick();
         self.request(INT_TIMER, timer_irq);
         let vblank_irq = self.ppu.tick(4);
@@ -255,5 +306,76 @@ mod tests {
         assert_eq!(b.peek(ppu::LCDC), 0x91);
         assert_eq!(b.peek(IF_ADDR), 0xE1);
         assert_eq!(b.peek(timer::DIV), 0xAB);
+    }
+
+    /// WRAM 0xC100–0xC19F에 0..160을 채우고 OAM 0xFE00에 0x55를 둔 버스.
+    fn bus_with_dma_source() -> Bus {
+        let mut b = bus();
+        for i in 0..0xA0u16 {
+            b.write(0xC100 + i, i as u8);
+        }
+        b.write(0xFE00, 0x55);
+        b
+    }
+
+    #[test]
+    fn dma_register_reads_back() {
+        let mut b = bus();
+        b.write(0xFF46, 0xC1);
+        assert_eq!(b.read(0xFF46), 0xC1);
+    }
+
+    #[test]
+    fn dma_blocks_oam_from_second_cycle_until_transfer_ends() {
+        let mut b = bus_with_dma_source();
+        b.write(0xFF46, 0xC1);
+        b.tick();
+        assert_eq!(b.read(0xFE00), 0x55, "쓰기 직후 1 M-사이클은 접근 가능");
+        b.tick();
+        assert_eq!(b.read(0xFE00), 0xFF, "2번째 M-사이클부터 막힌다");
+        for _ in 2..161 {
+            b.tick();
+        }
+        assert_eq!(b.read(0xFE00), 0xFF, "161번째 M-사이클까지 막혀 있다");
+        b.tick();
+        assert_eq!((b.read(0xFE00), b.read(0xFE9F)), (0x00, 0x9F));
+    }
+
+    #[test]
+    fn oam_writes_are_ignored_during_dma() {
+        let mut b = bus_with_dma_source();
+        b.write(0xFF46, 0xC1);
+        b.tick();
+        b.tick();
+        b.write(0xFE10, 0xEE);
+        for _ in 0..160 {
+            b.tick();
+        }
+        assert_eq!(b.read(0xFE10), 0x10);
+    }
+
+    #[test]
+    fn restarted_dma_keeps_oam_blocked() {
+        let mut b = bus_with_dma_source();
+        b.write(0xFF46, 0xC1);
+        for _ in 0..10 {
+            b.tick();
+        }
+        b.write(0xFF46, 0xC1);
+        b.tick();
+        assert_eq!(b.read(0xFE00), 0xFF);
+        b.tick();
+        assert_eq!(b.read(0xFE00), 0xFF);
+    }
+
+    #[test]
+    fn dma_from_high_source_reads_echo_ram() {
+        let mut b = bus();
+        b.write(0xDE00, 0x77);
+        b.write(0xFF46, 0xFE);
+        for _ in 0..162 {
+            b.tick();
+        }
+        assert_eq!(b.read(0xFE00), 0x77);
     }
 }
