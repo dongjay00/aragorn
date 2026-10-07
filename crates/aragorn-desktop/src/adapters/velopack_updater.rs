@@ -1,7 +1,40 @@
-use aragorn_app::update::{UpdateError, Updater};
-use semver::Version;
+use aragorn_app::update::{PackageSpec, UpdateError, Updater};
 use std::sync::Mutex;
 use velopack::{UpdateCheck, UpdateInfo, UpdateManager, sources::GithubSource};
+
+/// `vpk pack`이 채널을 지정하지 않았을 때 쓰는 OS별 기본 채널 이름.
+pub const PACKAGE_CHANNEL: &str = if cfg!(windows) {
+    "win"
+} else if cfg!(target_os = "macos") {
+    "osx"
+} else {
+    "linux"
+};
+
+/// 피드가 제시한 패키지가 서명된 정책이 지정한 버전, 해시와 같은지 확인한다.
+/// 피드(releases.{channel}.json)는 서명되지 않았으므로 이 검사가 패키지 무결성의 근거다.
+fn check_offered_package(
+    spec: &PackageSpec,
+    channel: &str,
+    offered_version: &str,
+    offered_sha256: &str,
+) -> Result<(), UpdateError> {
+    let expected = spec.sha256_by_channel.get(channel).ok_or_else(|| {
+        UpdateError::Download(format!("서명된 정책에 {channel} 패키지 정보가 없습니다"))
+    })?;
+    if offered_version != spec.version.to_string() {
+        return Err(UpdateError::Download(format!(
+            "피드의 버전 {offered_version}이(가) 정책의 {}와 다릅니다",
+            spec.version
+        )));
+    }
+    if !offered_sha256.eq_ignore_ascii_case(expected) {
+        return Err(UpdateError::Download(
+            "패키지 해시가 서명된 정책과 다릅니다".into(),
+        ));
+    }
+    Ok(())
+}
 
 /// Velopack으로 설치된 앱에서만 동작하는 업데이터.
 pub struct VelopackUpdater {
@@ -38,20 +71,31 @@ impl VelopackUpdater {
 }
 
 impl Updater for VelopackUpdater {
-    fn download(&self, version: &Version) -> Result<(), UpdateError> {
+    fn download(&self, spec: &PackageSpec) -> Result<(), UpdateError> {
         let check = self
             .manager
             .check_for_updates()
             .map_err(|e| UpdateError::Download(e.to_string()))?;
         let UpdateCheck::UpdateAvailable(info) = check else {
             return Err(UpdateError::Download(format!(
-                "{version} 패키지를 찾을 수 없습니다"
+                "{} 패키지를 찾을 수 없습니다",
+                spec.version
             )));
         };
+        let mut info = *info;
+        check_offered_package(
+            spec,
+            PACKAGE_CHANNEL,
+            &info.TargetFullRelease.Version,
+            &info.TargetFullRelease.SHA256,
+        )?;
+        // 델타로 재조립한 패키지는 서명된 해시로 검증되지 않으므로 전체 패키지만 받는다.
+        info.BaseRelease = None;
+        info.DeltasToTarget.clear();
         self.manager
             .download_updates(&info, None)
             .map_err(|e| UpdateError::Download(e.to_string()))?;
-        *self.pending.lock().expect("pending lock") = Some(*info);
+        *self.pending.lock().expect("pending lock") = Some(info);
         Ok(())
     }
 
@@ -77,7 +121,7 @@ impl Updater for VelopackUpdater {
 pub struct UnavailableUpdater;
 
 impl Updater for UnavailableUpdater {
-    fn download(&self, _version: &Version) -> Result<(), UpdateError> {
+    fn download(&self, _spec: &PackageSpec) -> Result<(), UpdateError> {
         Err(UpdateError::NotInstalled)
     }
     fn apply_and_restart(&self) -> Result<(), UpdateError> {
@@ -91,16 +135,71 @@ impl Updater for UnavailableUpdater {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use aragorn_app::update::PackageHashes;
+    use semver::Version;
 
     #[test]
     fn unavailable_updater_reports_not_installed() {
         let u = UnavailableUpdater;
-        assert_eq!(
-            u.download(&Version::new(1, 0, 0)),
-            Err(UpdateError::NotInstalled)
-        );
+        assert_eq!(u.download(&spec()), Err(UpdateError::NotInstalled));
         assert_eq!(u.apply_and_restart(), Err(UpdateError::NotInstalled));
         assert_eq!(u.apply_on_exit(), Err(UpdateError::NotInstalled));
+    }
+
+    fn spec() -> PackageSpec {
+        PackageSpec {
+            version: Version::new(1, 1, 0),
+            sha256_by_channel: PackageHashes::from([("win".to_string(), "ab".repeat(32))]),
+        }
+    }
+
+    #[test]
+    fn accepts_package_matching_signed_policy() {
+        assert_eq!(
+            check_offered_package(&spec(), "win", "1.1.0", &"AB".repeat(32)),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn rejects_channel_missing_from_policy() {
+        let result = check_offered_package(&spec(), "linux", "1.1.0", &"ab".repeat(32));
+        assert!(
+            matches!(result, Err(UpdateError::Download(_))),
+            "{result:?}"
+        );
+    }
+
+    #[test]
+    fn rejects_version_other_than_policy() {
+        let result = check_offered_package(&spec(), "win", "9.9.9", &"ab".repeat(32));
+        assert!(
+            matches!(result, Err(UpdateError::Download(_))),
+            "{result:?}"
+        );
+    }
+
+    #[test]
+    fn rejects_hash_other_than_policy() {
+        let result = check_offered_package(&spec(), "win", "1.1.0", &"cd".repeat(32));
+        assert!(
+            matches!(result, Err(UpdateError::Download(_))),
+            "{result:?}"
+        );
+    }
+
+    #[test]
+    fn rejects_feed_without_sha256() {
+        let result = check_offered_package(&spec(), "win", "1.1.0", "");
+        assert!(
+            matches!(result, Err(UpdateError::Download(_))),
+            "{result:?}"
+        );
+    }
+
+    #[test]
+    fn package_channel_is_a_velopack_default_channel() {
+        assert!(["win", "osx", "linux"].contains(&PACKAGE_CHANNEL));
     }
 
     #[test]

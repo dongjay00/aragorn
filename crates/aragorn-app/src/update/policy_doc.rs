@@ -1,4 +1,4 @@
-use super::{UpdateError, UpdatePolicy};
+use super::{PackageHashes, UpdateError, UpdatePolicy};
 use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
 use semver::Version;
 use serde::Deserialize;
@@ -9,6 +9,8 @@ struct PolicyDoc {
     minimum_supported: String,
     #[serde(default)]
     message: String,
+    #[serde(default)]
+    packages: PackageHashes,
 }
 
 /// 서명을 검증한 뒤에만 본문을 해석한다.
@@ -34,11 +36,27 @@ pub fn parse_policy(json: &[u8]) -> Result<UpdatePolicy, UpdateError> {
             "minimum_supported({minimum_supported})가 latest({latest})보다 큽니다"
         )));
     }
+    let packages = doc
+        .packages
+        .into_iter()
+        .map(|(channel, hash)| parse_sha256(&channel, &hash).map(|h| (channel, h)))
+        .collect::<Result<PackageHashes, _>>()?;
     Ok(UpdatePolicy {
         latest,
         minimum_supported,
         message: doc.message,
+        packages,
     })
+}
+
+fn parse_sha256(channel: &str, value: &str) -> Result<String, UpdateError> {
+    let valid = value.len() == 64 && value.bytes().all(|b| b.is_ascii_hexdigit());
+    if !valid {
+        return Err(UpdateError::Malformed(format!(
+            "packages.{channel}: SHA256 형식이 아닙니다"
+        )));
+    }
+    Ok(value.to_ascii_lowercase())
 }
 
 fn parse_version(field: &str, value: &str) -> Result<Version, UpdateError> {
@@ -127,6 +145,35 @@ mod tests {
     #[test]
     fn rejects_minimum_above_latest() {
         let body = br#"{"latest":"1.0.0","minimum_supported":"1.1.0"}"#;
+        assert!(matches!(parse_policy(body), Err(UpdateError::Malformed(_))));
+    }
+
+    const HASH: &str = "a3f1c2d4e5b6978877665544332211ffeeddccbbaa99887766554433221100aa";
+
+    #[test]
+    fn parses_signed_package_hashes() {
+        let body = format!(
+            r#"{{"latest":"1.0.0","minimum_supported":"1.0.0","packages":{{"win":"{HASH}"}}}}"#
+        );
+        let p = parse_policy(body.as_bytes()).unwrap();
+        assert_eq!(p.packages.get("win").map(String::as_str), Some(HASH));
+    }
+
+    #[test]
+    fn package_hash_is_normalized_to_lowercase() {
+        let body = format!(
+            r#"{{"latest":"1.0.0","minimum_supported":"1.0.0","packages":{{"linux":"{}"}}}}"#,
+            HASH.to_uppercase()
+        );
+        assert_eq!(
+            parse_policy(body.as_bytes()).unwrap().packages["linux"],
+            HASH
+        );
+    }
+
+    #[test]
+    fn rejects_malformed_package_hash() {
+        let body = br#"{"latest":"1.0.0","minimum_supported":"1.0.0","packages":{"win":"xyz"}}"#;
         assert!(matches!(parse_policy(body), Err(UpdateError::Malformed(_))));
     }
 

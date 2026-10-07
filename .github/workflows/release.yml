@@ -19,10 +19,6 @@ jobs:
         run: cargo xtask check-tag "${GITHUB_REF_NAME}"
       - id: version
         run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
-      - name: 초안 릴리스 생성
-        run: gh release create "${GITHUB_REF_NAME}" --draft --title "Aragorn ${{ steps.version.outputs.version }}" --generate-notes
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   package:
     needs: prepare
@@ -32,10 +28,13 @@ jobs:
         include:
           - os: windows-latest
             exe: aragorn.exe
+            channel: win
           - os: macos-latest
             exe: aragorn
+            channel: osx
           - os: ubuntu-22.04
             exe: aragorn
+            channel: linux
     runs-on: ${{ matrix.os }}
     env:
       VERSION: ${{ needs.prepare.outputs.version }}
@@ -47,8 +46,8 @@ jobs:
       - name: Linux 빌드 의존성
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y libxkbcommon-dev libwayland-dev libgl1-mesa-dev
-      - run: cargo test --workspace
-      - run: cargo build --release -p aragorn-desktop
+      - run: cargo test --workspace --locked
+      - run: cargo build --release --locked -p aragorn-desktop
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: "9.0.x"
@@ -57,28 +56,49 @@ jobs:
         run: |
           VPK_VERSION="$(cargo pkgid velopack | sed 's/.*[@#]//')"
           dotnet tool install -g vpk --version "$VPK_VERSION"
-      - name: 패키징과 업로드
+      - name: 패키징
         shell: bash
         run: |
           mkdir publish
           cp "target/release/${{ matrix.exe }}" publish/
-          vpk pack --packId Aragorn --packVersion "$VERSION" --packDir publish --mainExe "${{ matrix.exe }}" --packTitle Aragorn
-          vpk upload github --repoUrl "https://github.com/${{ github.repository }}" \
-            --token "${{ secrets.GITHUB_TOKEN }}" --tag "v$VERSION" --releaseName "Aragorn $VERSION" --merge
+          # 채널 이름은 앱의 PACKAGE_CHANNEL(win/osx/linux)과 같아야 한다.
+          vpk pack --packId Aragorn --packVersion "$VERSION" --packDir publish \
+            --mainExe "${{ matrix.exe }}" --packTitle Aragorn --channel "${{ matrix.channel }}" --outputDir Releases
+      - uses: actions/upload-artifact@v4
+        with:
+          name: package-${{ matrix.channel }}
+          path: Releases/*
+          if-no-files-found: error
 
   publish:
     needs: [prepare, package]
     runs-on: ubuntu-22.04
+    env:
+      VERSION: ${{ needs.prepare.outputs.version }}
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      # 서명 키가 없는 단계에서 빌드해, 의존성 빌드 스크립트가 키에 접근하지 못하게 한다.
+      - name: xtask 빌드
+        run: cargo build --locked -p xtask
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - name: 패키지 모으기 (파일 이름 충돌 시 실패)
+        run: |
+          mkdir dist
+          for f in artifacts/*/*; do
+            name="$(basename "$f")"
+            if [ -e "dist/$name" ]; then echo "중복 파일: $name"; exit 1; fi
+            cp "$f" "dist/$name"
+          done
+          ls -l dist
       - name: 업데이트 정책 생성과 서명
-        run: cargo xtask make-policy dist
+        run: target/debug/xtask make-policy dist dist
         env:
           ARAGORN_POLICY_SIGNING_KEY: ${{ secrets.ARAGORN_POLICY_SIGNING_KEY }}
-      - name: 정책 업로드 후 릴리스 공개
-        run: |
-          gh release upload "${GITHUB_REF_NAME}" dist/update-policy.json dist/update-policy.json.sig
-          gh release edit "${GITHUB_REF_NAME}" --draft=false --latest
+      # 모든 패키지와 서명된 정책을 한 번에 올리고 공개한다.
+      - name: 릴리스 공개
+        run: gh release create "${GITHUB_REF_NAME}" dist/* --title "Aragorn ${VERSION}" --generate-notes --latest
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

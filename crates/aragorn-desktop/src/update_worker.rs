@@ -57,8 +57,7 @@ impl UpdateWorker {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use aragorn_app::update::{UpdateError, UpdatePolicy};
-    use semver::Version;
+    use aragorn_app::update::{PackageSpec, UpdateError, UpdatePolicy};
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     struct SlowSource;
@@ -73,7 +72,7 @@ mod tests {
     struct NoUpdater;
 
     impl Updater for NoUpdater {
-        fn download(&self, _: &Version) -> Result<(), UpdateError> {
+        fn download(&self, _: &PackageSpec) -> Result<(), UpdateError> {
             Err(UpdateError::NotInstalled)
         }
         fn apply_and_restart(&self) -> Result<(), UpdateError> {

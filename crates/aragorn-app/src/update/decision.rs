@@ -1,4 +1,8 @@
 use semver::Version;
+use std::collections::BTreeMap;
+
+/// 채널(win, osx, linux)별 전체 패키지 SHA256 (소문자 16진수).
+pub type PackageHashes = BTreeMap<String, String>;
 
 /// 서명 검증을 통과한 업데이트 정책.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -6,6 +10,14 @@ pub struct UpdatePolicy {
     pub latest: Version,
     pub minimum_supported: Version,
     pub message: String,
+    pub packages: PackageHashes,
+}
+
+/// 내려받을 패키지와, 서명된 정책이 보증하는 채널별 해시.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PackageSpec {
+    pub version: Version,
+    pub sha256_by_channel: PackageHashes,
 }
 
 /// 업데이트에 관한 사용자 선택.
@@ -59,6 +71,7 @@ mod tests {
             latest: v(latest),
             minimum_supported: v(min),
             message: String::new(),
+            packages: PackageHashes::new(),
         }
     }
 

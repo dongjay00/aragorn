@@ -1,5 +1,4 @@
-use super::{UpdateCommand, UpdateError, UpdateEvent, UpdatePolicy};
-use semver::Version;
+use super::{PackageSpec, UpdateCommand, UpdateError, UpdateEvent, UpdatePolicy};
 
 /// 서명 검증까지 끝낸 업데이트 정책을 가져온다.
 pub trait UpdateSource: Send + Sync {
@@ -8,7 +7,8 @@ pub trait UpdateSource: Send + Sync {
 
 /// 업데이트 패키지를 내려받고 설치한다.
 pub trait Updater: Send + Sync {
-    fn download(&self, version: &Version) -> Result<(), UpdateError>;
+    /// 서명된 해시와 일치하는 패키지만 내려받아야 한다.
+    fn download(&self, spec: &PackageSpec) -> Result<(), UpdateError>;
     /// 성공하면 프로세스가 재시작되므로 반환하지 않을 수 있다.
     fn apply_and_restart(&self) -> Result<(), UpdateError>;
     /// 앱이 종료된 뒤 업데이트가 적용되도록 예약한다.
@@ -24,8 +24,8 @@ pub fn execute(
 ) -> Option<UpdateEvent> {
     match command {
         UpdateCommand::FetchPolicy => Some(UpdateEvent::PolicyFetched(source.fetch_policy())),
-        UpdateCommand::Download(version) => {
-            Some(UpdateEvent::DownloadFinished(updater.download(version)))
+        UpdateCommand::Download(spec) => {
+            Some(UpdateEvent::DownloadFinished(updater.download(spec)))
         }
         UpdateCommand::ApplyAndRestart => updater
             .apply_and_restart()
@@ -39,6 +39,8 @@ pub fn execute(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::update::PackageHashes;
+    use semver::Version;
     use std::sync::Mutex;
 
     struct FakeSource(Result<UpdatePolicy, UpdateError>);
@@ -67,11 +69,11 @@ mod tests {
     }
 
     impl Updater for FakeUpdater {
-        fn download(&self, version: &Version) -> Result<(), UpdateError> {
+        fn download(&self, spec: &PackageSpec) -> Result<(), UpdateError> {
             self.calls
                 .lock()
                 .unwrap()
-                .push(format!("download {version}"));
+                .push(format!("download {}", spec.version));
             self.result.clone()
         }
         fn apply_and_restart(&self) -> Result<(), UpdateError> {
@@ -89,6 +91,7 @@ mod tests {
             latest: Version::new(1, 1, 0),
             minimum_supported: Version::new(1, 0, 0),
             message: String::new(),
+            packages: PackageHashes::new(),
         }
     }
 
@@ -105,7 +108,10 @@ mod tests {
         let source = FakeSource(Ok(policy()));
         let updater = FakeUpdater::new(Err(UpdateError::Download("x".into())));
         let ev = execute(
-            &UpdateCommand::Download(Version::new(1, 1, 0)),
+            &UpdateCommand::Download(PackageSpec {
+                version: Version::new(1, 1, 0),
+                sha256_by_channel: PackageHashes::new(),
+            }),
             &source,
             &updater,
         );

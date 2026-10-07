@@ -1,4 +1,4 @@
-use super::{UpdateDecision, UpdateError, UpdatePolicy, UpdatePrefs, decide};
+use super::{PackageSpec, UpdateDecision, UpdateError, UpdatePolicy, UpdatePrefs, decide};
 use semver::Version;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -51,7 +51,7 @@ pub enum UpdateEvent {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum UpdateCommand {
     FetchPolicy,
-    Download(Version),
+    Download(PackageSpec),
     ApplyAndRestart,
     ApplyOnExit,
     SavePrefs(UpdatePrefs),
@@ -63,6 +63,8 @@ pub struct UpdateFlow {
     prefs: UpdatePrefs,
     updater_available: bool,
     state: UpdateState,
+    /// 마지막으로 서명 검증된 정책이 지정한 패키지 (재시도에도 쓴다)
+    target: Option<PackageSpec>,
 }
 
 impl UpdateFlow {
@@ -72,6 +74,7 @@ impl UpdateFlow {
             prefs,
             updater_available,
             state: UpdateState::Idle,
+            target: None,
         }
     }
 
@@ -209,7 +212,15 @@ impl UpdateFlow {
     }
 
     fn apply_decision(&mut self, policy: &UpdatePolicy) -> Vec<UpdateCommand> {
-        match decide(&self.current, policy, &self.prefs) {
+        let decision = decide(&self.current, policy, &self.prefs);
+        if let UpdateDecision::Soft { version, .. } | UpdateDecision::Forced { version } = &decision
+        {
+            self.target = Some(PackageSpec {
+                version: version.clone(),
+                sha256_by_channel: policy.packages.clone(),
+            });
+        }
+        match decision {
             UpdateDecision::UpToDate => {
                 self.state = UpdateState::UpToDate;
                 vec![]
@@ -239,20 +250,21 @@ impl UpdateFlow {
     }
 
     fn start_download(&mut self, version: Version, forced: bool) -> Vec<UpdateCommand> {
+        let Some(target) = self.target.clone().filter(|t| t.version == version) else {
+            return vec![];
+        };
         if !self.updater_available {
             return vec![];
         }
-        self.state = UpdateState::Downloading {
-            version: version.clone(),
-            forced,
-        };
-        vec![UpdateCommand::Download(version)]
+        self.state = UpdateState::Downloading { version, forced };
+        vec![UpdateCommand::Download(target)]
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::update::PackageHashes;
     use UpdateCommand as C;
     use UpdateEvent as E;
     use UpdateState as S;
@@ -261,11 +273,23 @@ mod tests {
         Version::parse(s).unwrap()
     }
 
+    fn hashes() -> PackageHashes {
+        PackageHashes::from([("win".to_string(), "ab".repeat(32))])
+    }
+
     fn policy(latest: &str, min: &str) -> UpdatePolicy {
         UpdatePolicy {
             latest: v(latest),
             minimum_supported: v(min),
             message: "msg".into(),
+            packages: hashes(),
+        }
+    }
+
+    fn spec(version: &str) -> PackageSpec {
+        PackageSpec {
+            version: v(version),
+            sha256_by_channel: hashes(),
         }
     }
 
@@ -318,7 +342,7 @@ mod tests {
         let mut f = flow(true, true);
         assert_eq!(
             checked(&mut f, "1.1.0", "1.0.0"),
-            vec![C::Download(v("1.1.0"))]
+            vec![C::Download(spec("1.1.0"))]
         );
         assert_eq!(
             f.state(),
@@ -349,7 +373,7 @@ mod tests {
         );
         assert!(f.blocks_emulation());
 
-        assert_eq!(f.handle(E::UpdateNow), vec![C::Download(v("1.2.0"))]);
+        assert_eq!(f.handle(E::UpdateNow), vec![C::Download(spec("1.2.0"))]);
         assert!(f.blocks_emulation());
 
         assert_eq!(
@@ -388,7 +412,7 @@ mod tests {
             "강제 업데이트 실패는 '나중에'로 넘길 수 없다"
         );
 
-        assert_eq!(f.handle(E::UpdateNow), vec![C::Download(v("1.2.0"))]);
+        assert_eq!(f.handle(E::UpdateNow), vec![C::Download(spec("1.2.0"))]);
     }
 
     #[test]

@@ -1,5 +1,8 @@
 use aragorn_app::update::{UpdateError, UpdatePolicy, UpdateSource, verify_and_parse};
-use std::{io::Read, time::Duration};
+use std::{
+    io::Read,
+    time::{Duration, Instant},
+};
 
 const POLICY_FILE: &str = "update-policy.json";
 const SIGNATURE_FILE: &str = "update-policy.json.sig";
@@ -10,6 +13,8 @@ pub struct GithubPolicySource {
     agent: ureq::Agent,
     base_url: String,
     public_key: [u8; 32],
+    /// 정책과 서명 두 요청을 합친 전체 제한 시간
+    timeout: Duration,
 }
 
 impl GithubPolicySource {
@@ -19,14 +24,20 @@ impl GithubPolicySource {
             agent,
             base_url,
             public_key,
+            timeout,
         }
     }
 
-    fn get(&self, file: &str) -> Result<Vec<u8>, UpdateError> {
+    fn get(&self, file: &str, deadline: Instant) -> Result<Vec<u8>, UpdateError> {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return Err(UpdateError::Network("업데이트 확인 시간 초과".into()));
+        }
         let url = format!("{}/{file}", self.base_url);
         let response = self
             .agent
             .get(&url)
+            .timeout(remaining)
             .call()
             .map_err(|e| UpdateError::Network(e.to_string()))?;
         let mut body = Vec::new();
@@ -41,8 +52,9 @@ impl GithubPolicySource {
 
 impl UpdateSource for GithubPolicySource {
     fn fetch_policy(&self) -> Result<UpdatePolicy, UpdateError> {
-        let json = self.get(POLICY_FILE)?;
-        let signature = self.get(SIGNATURE_FILE)?;
+        let deadline = Instant::now() + self.timeout;
+        let json = self.get(POLICY_FILE, deadline)?;
+        let signature = self.get(SIGNATURE_FILE, deadline)?;
         verify_and_parse(&json, &signature, &self.public_key)
     }
 }
@@ -63,6 +75,11 @@ mod tests {
 
     /// 경로별 고정 응답을 주는 테스트용 HTTP 서버. 없는 경로는 404.
     fn serve(routes: Vec<(&'static str, Vec<u8>)>) -> String {
+        serve_with_delay(routes, Duration::ZERO)
+    }
+
+    /// 매 요청마다 `delay`만큼 기다린 뒤 응답한다.
+    fn serve_with_delay(routes: Vec<(&'static str, Vec<u8>)>, delay: Duration) -> String {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = listener.local_addr().unwrap();
         thread::spawn(move || {
@@ -83,6 +100,7 @@ mod tests {
                     .nth(1)
                     .unwrap_or("")
                     .to_string();
+                thread::sleep(delay);
                 let (status, body): (&str, &[u8]) = match routes.iter().find(|(p, _)| *p == path) {
                     Some((_, body)) => ("200 OK", body),
                     None => ("404 Not Found", b"<html>Not Found</html>"),
@@ -131,6 +149,26 @@ mod tests {
         let base = serve(vec![]);
         let result = source(base, Duration::from_secs(5)).fetch_policy();
         assert!(matches!(result, Err(UpdateError::Network(_))), "{result:?}");
+    }
+
+    #[test]
+    fn total_time_is_bounded_across_both_requests() {
+        let sig = sign_policy(POLICY, &SECRET).to_vec();
+        let base = serve_with_delay(
+            vec![
+                ("/update-policy.json", POLICY.to_vec()),
+                ("/update-policy.json.sig", sig),
+            ],
+            Duration::from_millis(400),
+        );
+        let started = Instant::now();
+        let result = source(base, Duration::from_millis(600)).fetch_policy();
+        assert!(matches!(result, Err(UpdateError::Network(_))), "{result:?}");
+        assert!(
+            started.elapsed() < Duration::from_millis(900),
+            "{:?}",
+            started.elapsed()
+        );
     }
 
     #[test]
