@@ -68,6 +68,10 @@ impl Bus {
         &self.cart
     }
 
+    pub fn cartridge_mut(&mut self) -> &mut Cartridge {
+        &mut self.cart
+    }
+
     pub fn set_button(&mut self, button: Button, pressed: bool) {
         let irq = self.joypad.set_button(button, pressed);
         self.request(INT_JOYPAD, irq);

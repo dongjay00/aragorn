@@ -77,6 +77,10 @@ pub struct Cartridge {
     ram: Vec<u8>,
     ram_enabled: bool,
     mbc: Mbc,
+    /// 배터리가 있어 외부 RAM을 세이브 파일로 남겨야 하는 카트리지인지.
+    battery: bool,
+    /// 마지막으로 확인한 뒤 외부 RAM에 쓰기가 있었는지.
+    ram_dirty: bool,
 }
 
 /// 헤더의 RAM 크기 코드(0x0149)를 바이트 수로 바꾼다.
@@ -111,12 +115,18 @@ impl Cartridge {
             other => return Err(CartError::Unsupported(other)),
         };
         let ram = vec![0; ram_size(header.ram_size_code)];
+        let battery = matches!(
+            header.cart_type,
+            0x03 | 0x09 | 0x0F | 0x10 | 0x13 | 0x1B | 0x1E
+        );
         Ok(Cartridge {
             header,
             rom,
             ram,
             ram_enabled: false,
             mbc,
+            battery,
+            ram_dirty: false,
         })
     }
 
@@ -201,7 +211,30 @@ impl Cartridge {
     pub fn write_ram(&mut self, addr: u16, value: u8) {
         if let Some(i) = self.ram_offset(addr) {
             self.ram[i] = value;
+            self.ram_dirty = true;
         }
+    }
+
+    /// 세이브 파일로 남길 외부 RAM. 배터리가 없거나 RAM이 없는 카트리지는 `None`.
+    pub fn battery_ram(&self) -> Option<&[u8]> {
+        (self.battery && !self.ram.is_empty()).then_some(&self.ram[..])
+    }
+
+    /// 세이브 파일 내용을 외부 RAM에 싣는다. 길이가 다르면 앞쪽만 겹치는 만큼 복사한다
+    /// (RTC 블록이 붙은 .sav도 RAM 부분만 읽는다. RTC는 M6).
+    pub fn load_battery_ram(&mut self, data: &[u8]) {
+        let len = data.len().min(self.ram.len());
+        self.ram[..len].copy_from_slice(&data[..len]);
+    }
+
+    /// 마지막 호출 뒤 외부 RAM에 쓰기가 있었으면 `true`. 읽으면 초기화된다.
+    pub fn take_ram_dirty(&mut self) -> bool {
+        std::mem::take(&mut self.ram_dirty)
+    }
+
+    /// 게임이 외부 RAM을 켜 두었는지. RAM 활성화 레지스터가 없는 ROM+RAM 카트리지는 항상 `true`.
+    pub fn ram_enabled(&self) -> bool {
+        self.ram_enabled || self.mbc == Mbc::None
     }
 }
 
@@ -417,6 +450,77 @@ mod tests {
         assert_eq!(
             CartError::TooSmall(16).to_string(),
             "ROM 파일이 너무 작습니다 (16바이트)"
+        );
+    }
+
+    #[test]
+    fn only_battery_types_expose_battery_ram() {
+        assert!(
+            Cartridge::new(banked_rom(0x03, 0x01, 0x02))
+                .unwrap()
+                .battery_ram()
+                .is_some()
+        );
+        assert!(
+            Cartridge::new(banked_rom(0x13, 0x01, 0x03))
+                .unwrap()
+                .battery_ram()
+                .is_some()
+        );
+        assert!(
+            Cartridge::new(banked_rom(0x1B, 0x01, 0x03))
+                .unwrap()
+                .battery_ram()
+                .is_some()
+        );
+        assert!(
+            Cartridge::new(banked_rom(0x02, 0x01, 0x02))
+                .unwrap()
+                .battery_ram()
+                .is_none()
+        );
+        assert!(
+            Cartridge::new(banked_rom(0x0F, 0x01, 0x00))
+                .unwrap()
+                .battery_ram()
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn ram_writes_set_dirty_flag_until_taken() {
+        let mut cart = Cartridge::new(banked_rom(0x03, 0x01, 0x02)).unwrap();
+        cart.write_ram(0xA000, 0x01);
+        assert!(!cart.take_ram_dirty(), "꺼진 RAM에 쓴 것은 무시된다");
+        cart.write_rom(0x0000, 0x0A);
+        cart.write_ram(0xA000, 0x01);
+        assert!(cart.take_ram_dirty());
+        assert!(!cart.take_ram_dirty());
+    }
+
+    #[test]
+    fn loading_battery_ram_copies_overlapping_bytes() {
+        let mut cart = Cartridge::new(banked_rom(0x03, 0x01, 0x02)).unwrap();
+        let mut save = vec![0x5A; 0x2000 + 48];
+        save[0x1FFF] = 0x77;
+        cart.load_battery_ram(&save);
+        assert_eq!(cart.battery_ram().unwrap().len(), 0x2000);
+        assert_eq!(cart.battery_ram().unwrap()[0x1FFF], 0x77);
+        cart.load_battery_ram(&[1, 2]);
+        assert_eq!(&cart.battery_ram().unwrap()[..3], &[1, 2, 0x5A]);
+    }
+
+    #[test]
+    fn rom_only_ram_counts_as_enabled() {
+        assert!(
+            Cartridge::new(banked_rom(0x09, 0x00, 0x02))
+                .unwrap()
+                .ram_enabled()
+        );
+        assert!(
+            !Cartridge::new(banked_rom(0x03, 0x01, 0x02))
+                .unwrap()
+                .ram_enabled()
         );
     }
 }
