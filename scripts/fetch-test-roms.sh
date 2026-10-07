@@ -30,6 +30,10 @@ FILES=(
   "cpu_instrs/individual/09-op r,r.gb|b28e1be5cd95f22bd1ecacdd33c6f03e607d68870e31a47b15a0229033d5ba2a"
   "cpu_instrs/individual/10-bit ops.gb|7f5b8e488c6988b5aaba8c2a74529b7c180c55a58449d5ee89d606a07c53514a"
   "cpu_instrs/individual/11-op a,(hl).gb|0ec0cf9fda3f00becaefa476df6fb526c434abd9d4a4beac237c2c2692dac5d3"
+  "instr_timing/instr_timing.gb|646067b3d6c79fda810e9c3f1cb7c0efd5abb0a7ac06437c54e65720c15d9925"
+  "mem_timing/individual/01-read_timing.gb|52724532c5709e38e947eb429337c124c38bc68f373874435a7460548098b617"
+  "mem_timing/individual/02-write_timing.gb|eea92d3f4e95aab5910e0f7080916a3c42a2b8deae1ee5d45d1e3751d648f3f6"
+  "mem_timing/individual/03-modify_timing.gb|2e9067c670ff8b45916bf321677ad04a6896d06a057dbcb82ae9f208a1ae9c34"
 )
 
 for entry in "${FILES[@]}"; do
@@ -50,4 +54,31 @@ for entry in "${FILES[@]}"; do
   mv "$out.tmp" "$out"
   echo "내려받음: $path"
 done
-echo "테스트 ROM 준비 완료: $DEST"
+echo "Blargg 테스트 ROM 준비 완료: $DEST"
+
+# mooneye-test-suite 공식 배포본 (MIT)
+MTS_NAME="mts-20240926-1737-443f6e1"
+MTS_URL="https://gekkio.fi/files/mooneye-test-suite/$MTS_NAME/$MTS_NAME.tar.gz"
+MTS_SHA256="e5b1ed3d928d879263f5b852e4ba20514550d5bc7559775b140e8df4ab4dd4b3"
+MTS_DEST="$ROOT/tests/roms/mooneye"
+MTS_MARKER="$MTS_DEST/.source"
+
+if [[ -f "$MTS_MARKER" && "$(cat "$MTS_MARKER")" == "$MTS_SHA256" ]]; then
+  echo "mooneye 테스트 ROM 준비 완료: $MTS_DEST"
+  exit 0
+fi
+mkdir -p "$ROOT/tests/roms"
+archive="$ROOT/tests/roms/$MTS_NAME.tar.gz"
+curl -sfL --retry 3 -o "$archive" "$MTS_URL"
+actual="$(sha256 "$archive")"
+if [[ "$actual" != "$MTS_SHA256" ]]; then
+  rm -f "$archive"
+  echo "SHA256 불일치: $MTS_NAME.tar.gz ($actual)" >&2
+  exit 1
+fi
+rm -rf "$MTS_DEST" "$ROOT/tests/roms/$MTS_NAME"
+tar -xzf "$archive" -C "$ROOT/tests/roms"
+mv "$ROOT/tests/roms/$MTS_NAME" "$MTS_DEST"
+rm -f "$archive"
+echo "$MTS_SHA256" > "$MTS_MARKER"
+echo "mooneye 테스트 ROM 준비 완료: $MTS_DEST"
