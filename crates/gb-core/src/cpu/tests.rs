@@ -280,3 +280,93 @@ fn halt_bug_reads_next_byte_twice() {
     });
     assert_eq!((cpu.regs.a, cpu.regs.pc, cpu.halted()), (2, 0x0102, false));
 }
+
+/// IE, IF, IME를 설정한다.
+fn with_interrupt(ie: u8, iflag: u8, ime: bool) -> impl FnOnce(&mut Cpu, &mut FlatBus) {
+    move |c: &mut Cpu, b: &mut FlatBus| {
+        b.mem[0xFFFF] = ie;
+        b.mem[0xFF0F] = iflag;
+        c.ime = ime;
+    }
+}
+
+#[test]
+fn dispatches_timer_interrupt() {
+    let (cpu, bus) = run(&[0x00], 1, with_interrupt(0x04, 0x04, true));
+    assert_eq!((cpu.regs.pc, cpu.regs.sp, bus.cycles), (0x0050, 0xCFFE, 5));
+    assert_eq!((bus.mem[0xCFFF], bus.mem[0xCFFE]), (0x01, 0x00));
+    assert_eq!(bus.mem[0xFF0F], 0x00);
+    assert!(!cpu.ime());
+}
+
+#[test]
+fn highest_priority_interrupt_wins() {
+    let (cpu, bus) = run(&[0x00], 1, with_interrupt(0x1F, 0x06, true));
+    assert_eq!((cpu.regs.pc, bus.mem[0xFF0F]), (0x0048, 0x04));
+}
+
+#[test]
+fn ignores_upper_ie_bits() {
+    let (cpu, _) = run(&[0x00], 1, with_interrupt(0xE0, 0xFF, true));
+    assert_eq!(cpu.regs.pc, 0x0101);
+}
+
+#[test]
+fn no_dispatch_when_ime_off() {
+    let (cpu, _) = run(&[0x00], 1, with_interrupt(0x01, 0x01, false));
+    assert_eq!(cpu.regs.pc, 0x0101);
+}
+
+#[test]
+fn halt_waits_one_cycle_per_step() {
+    let (cpu, bus) = run(&[0x76, 0x3C], 3, |_, _| {});
+    assert!(cpu.halted());
+    assert_eq!((cpu.regs.pc, cpu.regs.a, bus.cycles), (0x0101, 0, 3));
+}
+
+#[test]
+fn interrupt_wakes_halt_without_ime() {
+    let mut bus = FlatBus::with_program(&[0x76, 0x3C]);
+    let mut cpu = cpu();
+    bus.mem[0xFFFF] = 0x01;
+    cpu.step(&mut bus); // HALT
+    cpu.step(&mut bus); // 대기
+    assert!(cpu.halted());
+    bus.mem[0xFF0F] = 0x01;
+    cpu.step(&mut bus); // 깨어나서 INC A
+    assert!(!cpu.halted());
+    assert_eq!((cpu.regs.a, cpu.regs.pc), (1, 0x0102));
+}
+
+#[test]
+fn interrupt_wakes_halt_and_dispatches_with_ime() {
+    let mut bus = FlatBus::with_program(&[0x76, 0x3C]);
+    let mut cpu = cpu();
+    cpu.ime = true;
+    bus.mem[0xFFFF] = 0x01;
+    cpu.step(&mut bus); // HALT
+    bus.mem[0xFF0F] = 0x01;
+    cpu.step(&mut bus); // 디스패치
+    assert_eq!(cpu.regs.pc, 0x0040);
+    assert_eq!((bus.mem[0xCFFF], bus.mem[0xCFFE]), (0x01, 0x01));
+}
+
+#[test]
+fn interrupt_dispatches_after_instruction_following_ei() {
+    let (cpu, bus) = run(&[0xFB, 0x00, 0x00], 3, with_interrupt(0x01, 0x01, false));
+    assert_eq!(cpu.regs.pc, 0x0040);
+    assert_eq!((bus.mem[0xCFFF], bus.mem[0xCFFE]), (0x01, 0x02));
+}
+
+#[test]
+fn locked_cpu_ignores_interrupts() {
+    let mut bus = FlatBus::with_program(&[0xD3]);
+    let mut cpu = cpu();
+    cpu.step(&mut bus);
+    cpu.ime = true;
+    bus.mem[0xFFFF] = 0x01;
+    bus.mem[0xFF0F] = 0x01;
+    cpu.step(&mut bus);
+    assert_eq!(cpu.regs.pc, 0x0101);
+    assert!(cpu.lock().is_some());
+}

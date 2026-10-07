@@ -67,9 +67,16 @@ impl Cpu {
         self.lock
     }
 
-    /// 명령 하나를 실행한다.
+    /// 명령 하나, 인터럽트 디스패치 하나, 또는 HALT 대기 1 M-사이클을 실행한다.
     pub fn step<B: CpuBus>(&mut self, bus: &mut B) {
         if self.lock.is_some() {
+            bus.tick();
+            return;
+        }
+        if self.service_interrupt(bus) {
+            return;
+        }
+        if self.halted {
             bus.tick();
             return;
         }
@@ -80,6 +87,28 @@ impl Cpu {
             self.ime = true;
             self.ime_pending = false;
         }
+    }
+
+    /// 대기 중인 인터럽트가 있으면 HALT를 풀고, IME가 켜져 있으면 디스패치한다 (5 M-사이클).
+    fn service_interrupt<B: CpuBus>(&mut self, bus: &mut B) -> bool {
+        let pending = pending_interrupts(bus);
+        if pending == 0 {
+            return false;
+        }
+        self.halted = false;
+        if !self.ime {
+            return false;
+        }
+        self.ime = false;
+        let bit = pending.trailing_zeros() as u8;
+        let iflag = bus.read(IF_ADDR);
+        bus.write(IF_ADDR, iflag & !(1 << bit));
+        bus.tick();
+        let pc = self.regs.pc;
+        self.push16(bus, pc);
+        self.regs.pc = 0x0040 + 8 * u16::from(bit);
+        bus.tick();
+        true
     }
 
     fn fetch8<B: CpuBus>(&mut self, bus: &mut B) -> u8 {
