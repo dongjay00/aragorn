@@ -1,5 +1,5 @@
 use crate::{
-    adapters::{FsSaveStore, UnavailableUpdater},
+    adapters::{CpalAudio, FsSaveStore, UnavailableUpdater},
     build_info,
     ui::{
         input,
@@ -81,6 +81,7 @@ pub struct AragornApp {
     notice: Option<String>,
     /// 세이브 저장 실패를 이미 경고했는지 (`proceed_after_flush`)
     unsaved_warned: bool,
+    audio: CpalAudio,
 }
 
 impl AragornApp {
@@ -115,6 +116,7 @@ impl AragornApp {
             last_tick: Instant::now(),
             notice: None,
             unsaved_warned: false,
+            audio: CpalAudio::open(),
         };
         if app.worker.is_some() {
             app.dispatch(UpdateEvent::CheckRequested);
@@ -168,6 +170,9 @@ impl AragornApp {
         }
         if session.advance(elapsed) > 0 {
             self.screen.update(ctx, session.framebuffer());
+        }
+        if let Some(sink) = self.audio.sink() {
+            session.pump_audio(sink);
         }
         self.collect_session_errors();
         ctx.request_repaint();
