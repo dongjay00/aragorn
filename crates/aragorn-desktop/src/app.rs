@@ -1,5 +1,5 @@
 use crate::{
-    adapters::{CpalAudio, FsSaveStore, UnavailableUpdater},
+    adapters::{CpalAudio, FsSaveStore, SystemClock, UnavailableUpdater},
     build_info,
     ui::{
         input,
@@ -17,7 +17,7 @@ use eframe::egui;
 use std::{
     path::{Path, PathBuf},
     sync::Arc,
-    time::{Duration, Instant, SystemTime},
+    time::{Duration, Instant},
 };
 
 const RECHECK_INTERVAL: Duration = Duration::from_secs(6 * 60 * 60);
@@ -33,22 +33,17 @@ pub struct AppDeps {
     pub initial_rom: Option<PathBuf>,
 }
 
-/// ROM 파일을 읽어 세션을 만든다. 배터리 세이브는 ROM 옆 `.sav`에서 읽고 쓴다.
+/// ROM 파일을 읽어 세션을 만든다. 배터리 세이브는 ROM 옆 `.sav`에서 읽고 쓰고, RTC는 시스템 시계를 쓴다.
 /// 실패하면 상태 표시줄에 보일 문구를 돌려준다.
-pub fn load_session(path: &Path, now_unix: u64) -> Result<Session, String> {
+pub fn load_session(path: &Path) -> Result<Session, String> {
     let name = path.file_name().map_or_else(
         || path.display().to_string(),
         |n| n.to_string_lossy().into_owned(),
     );
     let rom = std::fs::read(path).map_err(|e| format!("{name}을(를) 읽을 수 없습니다: {e}"))?;
     let store = Box::new(FsSaveStore::for_rom(path));
-    Session::load(rom, store, now_unix).map_err(|e| format!("{name}을(를) 열 수 없습니다: {e}"))
-}
-
-fn now_unix() -> u64 {
-    SystemTime::now()
-        .duration_since(SystemTime::UNIX_EPOCH)
-        .map_or(0, |d| d.as_secs())
+    Session::load(rom, store, Box::new(SystemClock))
+        .map_err(|e| format!("{name}을(를) 열 수 없습니다: {e}"))
 }
 
 /// 저장하지 못한 진행이 있을 때 ROM 교체·종료를 계속할지 정한다.
@@ -133,7 +128,7 @@ impl AragornApp {
             self.notice = Some(UNSAVED_WARNING.to_string());
             return;
         }
-        match load_session(path, now_unix()) {
+        match load_session(path) {
             Ok(session) => {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Title(format!(
                     "Aragorn v{} - {}",
@@ -348,7 +343,7 @@ mod tests {
 
     #[test]
     fn missing_rom_file_reports_read_error() {
-        let err = load_session(Path::new("/없는/경로/pokemon.gb"), 0)
+        let err = load_session(Path::new("/없는/경로/pokemon.gb"))
             .err()
             .unwrap();
         assert!(
@@ -362,7 +357,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("broken.gb");
         std::fs::write(&path, [0u8; 16]).unwrap();
-        let err = load_session(&path, 0).err().unwrap();
+        let err = load_session(&path).err().unwrap();
         assert_eq!(
             err,
             "broken.gb을(를) 열 수 없습니다: ROM 파일이 너무 작습니다 (16바이트)"
@@ -384,12 +379,12 @@ mod tests {
         let path = dir.path().join("game.gb");
         std::fs::write(&path, &rom).unwrap();
 
-        let mut session = load_session(&path, 0).unwrap();
+        let mut session = load_session(&path).unwrap();
         session.advance(aragorn_app::pacing::FRAME_DURATION);
         let save = std::fs::read(dir.path().join("game.sav")).unwrap();
         assert_eq!((save.len(), save[0]), (0x2000, 0x42));
 
-        let reloaded = load_session(&path, 0).unwrap();
+        let reloaded = load_session(&path).unwrap();
         assert_eq!(reloaded.battery_ram().unwrap()[0], 0x42);
     }
 
