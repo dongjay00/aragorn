@@ -1,7 +1,8 @@
 //! 카트리지: 헤더 파싱과 ROM/RAM 매핑 (Pan Docs "The Cartridge Header").
 //!
-//! ROM-only, MBC1, MBC3, MBC5의 ROM/RAM 뱅크 전환을 지원한다. 배터리 세이브와 MBC3 RTC는 M4/M6에서 다룬다.
+//! ROM-only, MBC1, MBC3(+RTC), MBC5의 ROM/RAM 뱅크 전환과 배터리 세이브를 지원한다.
 
+use crate::rtc::{self, Rtc};
 use std::fmt;
 
 const HEADER_END: usize = 0x0150;
@@ -65,7 +66,7 @@ enum Mbc {
     None,
     /// `bank1`: 5비트 ROM 뱅크(0은 1로 보정), `bank2`: 2비트(ROM 상위 비트 또는 RAM 뱅크), `mode`: 뱅킹 모드.
     Mbc1 { bank1: u8, bank2: u8, mode: bool },
-    /// `rom_bank`: 7비트(0은 1로 보정), `ram_select`: 0–3은 RAM 뱅크, 0x08–0x0C는 RTC 레지스터(M6).
+    /// `rom_bank`: 7비트(0은 1로 보정), `ram_select`: 0–3은 RAM 뱅크, 0x08–0x0C는 RTC 레지스터.
     Mbc3 { rom_bank: u8, ram_select: u8 },
     /// `rom_bank`: 9비트(0도 그대로), `ram_bank`: 4비트.
     Mbc5 { rom_bank: u16, ram_bank: u8 },
@@ -79,8 +80,10 @@ pub struct Cartridge {
     mbc: Mbc,
     /// 배터리가 있어 외부 RAM을 세이브 파일로 남겨야 하는 카트리지인지.
     battery: bool,
-    /// 마지막으로 확인한 뒤 외부 RAM에 쓰기가 있었는지.
+    /// 마지막으로 확인한 뒤 외부 RAM(또는 RTC)에 쓰기가 있었는지.
     ram_dirty: bool,
+    /// MBC3+TIMER 카트리지(0x0F, 0x10)의 실시간 시계.
+    rtc: Option<Rtc>,
 }
 
 /// 헤더의 RAM 크기 코드(0x0149)를 바이트 수로 바꾼다.
@@ -119,6 +122,7 @@ impl Cartridge {
             header.cart_type,
             0x03 | 0x09 | 0x0F | 0x10 | 0x13 | 0x1B | 0x1E
         );
+        let rtc = matches!(header.cart_type, 0x0F | 0x10).then(Rtc::default);
         Ok(Cartridge {
             header,
             rom,
@@ -127,6 +131,7 @@ impl Cartridge {
             mbc,
             battery,
             ram_dirty: false,
+            rtc,
         })
     }
 
@@ -169,8 +174,11 @@ impl Cartridge {
             (Mbc::Mbc1 { mode, .. }, _) => *mode = value & 0x01 != 0,
             (Mbc::Mbc3 { rom_bank, .. }, 0x2000..=0x3FFF) => *rom_bank = (value & 0x7F).max(1),
             (Mbc::Mbc3 { ram_select, .. }, 0x4000..=0x5FFF) => *ram_select = value & 0x0F,
-            // RTC 래치(0x6000–0x7FFF)는 M6에서 구현한다.
-            (Mbc::Mbc3 { .. }, _) => {}
+            (Mbc::Mbc3 { .. }, _) => {
+                if let Some(rtc) = &mut self.rtc {
+                    rtc.write_latch(value);
+                }
+            }
             (Mbc::Mbc5 { rom_bank, .. }, 0x2000..=0x2FFF) => {
                 *rom_bank = (*rom_bank & 0x100) | u16::from(value);
             }
@@ -203,28 +211,77 @@ impl Cartridge {
         Some((bank * 0x2000 + usize::from(addr & 0x1FFF)) % self.ram.len())
     }
 
+    /// RAM이 켜져 있고 MBC3가 RTC 레지스터(0x08–0x0C)를 고르고 있으면 그 번호.
+    fn rtc_select(&self) -> Option<u8> {
+        match self.mbc {
+            Mbc::Mbc3 { ram_select, .. }
+                if self.ram_enabled
+                    && self.rtc.is_some()
+                    && (0x08..=0x0C).contains(&ram_select) =>
+            {
+                Some(ram_select)
+            }
+            _ => None,
+        }
+    }
+
     /// 0xA000–0xBFFF. RAM이 꺼져 있거나 없으면 0xFF.
     pub fn read_ram(&self, addr: u16) -> u8 {
+        if let (Some(select), Some(rtc)) = (self.rtc_select(), &self.rtc) {
+            return rtc.read(select);
+        }
         self.ram_offset(addr).map_or(0xFF, |i| self.ram[i])
     }
 
     pub fn write_ram(&mut self, addr: u16, value: u8) {
+        if let Some(select) = self.rtc_select() {
+            if let Some(rtc) = &mut self.rtc {
+                rtc.write(select, value);
+                self.ram_dirty = true;
+            }
+            return;
+        }
         if let Some(i) = self.ram_offset(addr) {
             self.ram[i] = value;
             self.ram_dirty = true;
         }
     }
 
-    /// 세이브 파일로 남길 외부 RAM. 배터리가 없거나 RAM이 없는 카트리지는 `None`.
-    pub fn battery_ram(&self) -> Option<&[u8]> {
-        (self.battery && !self.ram.is_empty()).then_some(&self.ram[..])
+    /// RTC를 `dots` dot 진행한다 (RTC가 없으면 아무것도 하지 않는다).
+    pub fn tick(&mut self, dots: u32) {
+        if let Some(rtc) = &mut self.rtc {
+            rtc.tick(dots);
+        }
     }
 
-    /// 세이브 파일 내용을 외부 RAM에 싣는다. 길이가 다르면 앞쪽만 겹치는 만큼 복사한다
-    /// (RTC 블록이 붙은 .sav도 RAM 부분만 읽는다. RTC는 M6).
-    pub fn load_battery_ram(&mut self, data: &[u8]) {
+    /// 외부 RAM 크기(바이트). 세이브 파일의 RAM 부분 길이다.
+    pub fn ram_len(&self) -> usize {
+        self.ram.len()
+    }
+
+    /// 세이브 파일 내용: 외부 RAM, 그리고 RTC가 있으면 48바이트 RTC 블록(`now_unix`는 저장 시각).
+    /// 배터리가 없거나 남길 것이 없는 카트리지는 `None`.
+    pub fn battery_ram(&self, now_unix: u64) -> Option<Vec<u8>> {
+        if !self.battery || (self.ram.is_empty() && self.rtc.is_none()) {
+            return None;
+        }
+        let mut data = self.ram.clone();
+        if let Some(rtc) = &self.rtc {
+            data.extend_from_slice(&rtc.save_block(now_unix));
+        }
+        Some(data)
+    }
+
+    /// 세이브 파일 내용을 싣는다. RAM 부분은 겹치는 만큼 복사하고, RTC 카트리지는 뒤따르는 RTC 블록을
+    /// 읽어 저장 시각부터 `now_unix`까지 지난 시간을 반영한다. RTC 블록이 없거나 깨졌으면 시계는 0부터 간다.
+    pub fn load_battery_ram(&mut self, data: &[u8], now_unix: u64) {
         let len = data.len().min(self.ram.len());
         self.ram[..len].copy_from_slice(&data[..len]);
+        if let Some(rtc) = &mut self.rtc
+            && let Some(block) = data.get(self.ram.len()..)
+        {
+            rtc.load_block(&block[..block.len().min(rtc::SAVE_BLOCK_LEN)], now_unix);
+        }
     }
 
     /// 마지막 호출 뒤 외부 RAM에 쓰기가 있었으면 `true`. 읽으면 초기화된다.
@@ -390,7 +447,7 @@ mod tests {
         cart.write_rom(0x4000, 0x02);
         assert_eq!(cart.read_ram(0xA123), 0x33);
         cart.write_rom(0x4000, 0x08);
-        assert_eq!(cart.read_ram(0xA123), 0xFF, "RTC 레지스터는 M6에서 구현");
+        assert_eq!(cart.read_ram(0xA123), 0xFF, "RTC가 없는 MBC3(0x13)");
     }
 
     #[test]
@@ -455,36 +512,22 @@ mod tests {
 
     #[test]
     fn only_battery_types_expose_battery_ram() {
-        assert!(
-            Cartridge::new(banked_rom(0x03, 0x01, 0x02))
+        let saved = |cart_type, ram_code| {
+            Cartridge::new(banked_rom(cart_type, 0x01, ram_code))
                 .unwrap()
-                .battery_ram()
-                .is_some()
+                .battery_ram(0)
+                .map(|data| data.len())
+        };
+        assert_eq!(saved(0x03, 0x02), Some(0x2000));
+        assert_eq!(saved(0x13, 0x03), Some(0x8000));
+        assert_eq!(saved(0x1B, 0x03), Some(0x8000));
+        assert_eq!(saved(0x02, 0x02), None, "배터리 없음");
+        assert_eq!(
+            saved(0x0F, 0x00),
+            Some(48),
+            "MBC3+TIMER+BATTERY: RAM 없이 RTC 블록만"
         );
-        assert!(
-            Cartridge::new(banked_rom(0x13, 0x01, 0x03))
-                .unwrap()
-                .battery_ram()
-                .is_some()
-        );
-        assert!(
-            Cartridge::new(banked_rom(0x1B, 0x01, 0x03))
-                .unwrap()
-                .battery_ram()
-                .is_some()
-        );
-        assert!(
-            Cartridge::new(banked_rom(0x02, 0x01, 0x02))
-                .unwrap()
-                .battery_ram()
-                .is_none()
-        );
-        assert!(
-            Cartridge::new(banked_rom(0x0F, 0x01, 0x00))
-                .unwrap()
-                .battery_ram()
-                .is_none()
-        );
+        assert_eq!(saved(0x10, 0x03), Some(0x8000 + 48));
     }
 
     #[test]
@@ -503,11 +546,85 @@ mod tests {
         let mut cart = Cartridge::new(banked_rom(0x03, 0x01, 0x02)).unwrap();
         let mut save = vec![0x5A; 0x2000 + 48];
         save[0x1FFF] = 0x77;
-        cart.load_battery_ram(&save);
-        assert_eq!(cart.battery_ram().unwrap().len(), 0x2000);
-        assert_eq!(cart.battery_ram().unwrap()[0x1FFF], 0x77);
-        cart.load_battery_ram(&[1, 2]);
-        assert_eq!(&cart.battery_ram().unwrap()[..3], &[1, 2, 0x5A]);
+        cart.load_battery_ram(&save, 0);
+        assert_eq!(cart.battery_ram(0).unwrap().len(), 0x2000);
+        assert_eq!(cart.battery_ram(0).unwrap()[0x1FFF], 0x77);
+        cart.load_battery_ram(&[1, 2], 0);
+        assert_eq!(&cart.battery_ram(0).unwrap()[..3], &[1, 2, 0x5A]);
+    }
+
+    /// MBC3+TIMER+RAM+BATTERY(0x10), RAM 32KB, RAM 켜짐.
+    fn rtc_cart() -> Cartridge {
+        let mut cart = Cartridge::new(banked_rom(0x10, 0x06, 0x03)).unwrap();
+        cart.write_rom(0x0000, 0x0A);
+        cart
+    }
+
+    fn latch(cart: &mut Cartridge) {
+        cart.write_rom(0x6000, 0x00);
+        cart.write_rom(0x6000, 0x01);
+    }
+
+    /// 1초(4194304 dot) 진행한다.
+    fn tick_second(cart: &mut Cartridge) {
+        for _ in 0..4_194_304 / 4 {
+            cart.tick(4);
+        }
+    }
+
+    #[test]
+    fn mbc3_timer_maps_rtc_registers_through_latch() {
+        let mut cart = rtc_cart();
+        cart.write_rom(0x4000, 0x08);
+        cart.write_ram(0xA000, 30);
+        assert!(cart.take_ram_dirty(), "시계 설정도 저장 대상이다");
+        latch(&mut cart);
+        assert_eq!(cart.read_ram(0xA000), 30);
+        tick_second(&mut cart);
+        assert_eq!(cart.read_ram(0xA000), 30, "다시 래치하기 전에는 그대로");
+        latch(&mut cart);
+        assert_eq!(
+            cart.read_ram(0xBFFF),
+            31,
+            "0xA000–0xBFFF 어디서나 같은 레지스터"
+        );
+        cart.write_rom(0x4000, 0x00);
+        cart.write_ram(0xA000, 0x44);
+        assert_eq!(cart.read_ram(0xA000), 0x44, "RAM 뱅크는 그대로 쓴다");
+        cart.write_rom(0x0000, 0x00);
+        cart.write_rom(0x4000, 0x08);
+        assert_eq!(
+            cart.read_ram(0xA000),
+            0xFF,
+            "RAM이 꺼져 있으면 RTC도 막힌다"
+        );
+    }
+
+    #[test]
+    fn rtc_block_follows_ram_and_restores_with_elapsed_time() {
+        let mut cart = rtc_cart();
+        cart.write_ram(0xA000, 0x42);
+        cart.write_rom(0x4000, 0x0A);
+        cart.write_ram(0xA000, 5); // 5시
+        let save = cart.battery_ram(1_000).unwrap();
+        assert_eq!(save.len(), 0x8000 + 48);
+
+        let mut loaded = rtc_cart();
+        loaded.load_battery_ram(&save, 1_000 + 2 * 3600);
+        loaded.write_rom(0x4000, 0x0A);
+        latch(&mut loaded);
+        assert_eq!(loaded.read_ram(0xA000), 7, "꺼져 있던 2시간을 반영");
+        loaded.write_rom(0x4000, 0x00);
+        assert_eq!(loaded.read_ram(0xA000), 0x42);
+    }
+
+    #[test]
+    fn save_without_rtc_block_starts_clock_from_zero() {
+        let mut cart = rtc_cart();
+        cart.load_battery_ram(&vec![0x11; 0x8000], 1_000_000);
+        cart.write_rom(0x4000, 0x0A);
+        latch(&mut cart);
+        assert_eq!(cart.read_ram(0xA000), 0);
     }
 
     #[test]

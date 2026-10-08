@@ -16,11 +16,18 @@ pub trait SaveStore {
     fn save_battery(&self, data: &[u8]) -> io::Result<()>;
 }
 
+/// 현재 시각 (포트). MBC3 RTC 세이브의 저장 시각과 앱이 꺼져 있던 시간 계산에 쓴다.
+pub trait Clock {
+    /// 유닉스 시각(초).
+    fn now_unix(&self) -> u64;
+}
+
 pub struct Session {
     gb: GameBoy,
     pacer: FramePacer,
     title: String,
     store: Box<dyn SaveStore>,
+    clock: Box<dyn Clock>,
     /// 아직 저장하지 않은 외부 RAM 쓰기가 있는지.
     unsaved: bool,
     /// 마지막 외부 RAM 쓰기 뒤 지난 프레임 수.
@@ -36,19 +43,21 @@ pub struct Session {
 }
 
 impl Session {
-    /// ROM을 불러오고, 배터리 카트리지면 `store`의 세이브를 싣는다.
-    /// 세이브를 읽지 못해도 게임은 새로 시작하고 오류는 `take_errors`로 알린다.
+    /// ROM을 불러오고, 배터리 카트리지면 `store`의 세이브를 `clock`의 현재 시각과 함께 싣는다(RTC가 꺼져
+    /// 있던 시간을 반영한다). 세이브를 읽지 못해도 게임은 새로 시작하고 오류는 `take_errors`로 알린다.
     pub fn load(
         rom: Vec<u8>,
         store: Box<dyn SaveStore>,
-        now_unix: u64,
+        clock: Box<dyn Clock>,
     ) -> Result<Session, CartError> {
         // 헤더의 CGB 플래그로 기기를 고른다: 노랑·금·은·크리스탈은 CGB, 레드·블루는 DMG.
         let mut gb = GameBoy::new(rom, Model::Auto)?;
         let title = gb.header().title.trim().to_string();
         let mut errors = Vec::new();
         let mut store_blocked = false;
-        if let Some(ram_len) = gb.battery_ram().map(|ram| ram.len()) {
+        if gb.battery_ram(0).is_some() {
+            // RTC 블록이 없는 세이브(다른 에뮬레이터, M5 이전)도 RAM만 다 있으면 정상이다.
+            let ram_len = gb.cartridge_ram_len();
             match store.load_battery() {
                 Ok(Some(data)) => {
                     if data.len() < ram_len {
@@ -57,7 +66,7 @@ impl Session {
                             data.len()
                         ));
                     }
-                    gb.load_battery_ram(&data, now_unix);
+                    gb.load_battery_ram(&data, clock.now_unix());
                 }
                 Ok(None) => {}
                 Err(e) => {
@@ -71,6 +80,7 @@ impl Session {
             pacer: FramePacer::default(),
             title,
             store,
+            clock,
             unsaved: false,
             idle_frames: 0,
             save_failed: false,
@@ -119,8 +129,9 @@ impl Session {
         self.gb.set_sample_rate(f64::from(rate) * adjust);
     }
 
+    /// 지금 저장한다면 세이브 파일에 쓸 내용.
     pub fn battery_ram(&self) -> Option<Vec<u8>> {
-        self.gb.battery_ram()
+        self.gb.battery_ram(self.clock.now_unix())
     }
 
     /// 저장하지 않은 세이브가 있으면 지금 저장한다. 앱 종료, ROM 교체, 업데이트 적용 전에 부른다.
@@ -153,7 +164,7 @@ impl Session {
     }
 
     fn save_battery(&mut self) {
-        let Some(ram) = self.gb.battery_ram() else {
+        let Some(ram) = self.battery_ram() else {
             self.unsaved = false;
             return;
         };
@@ -221,10 +232,37 @@ mod tests {
         }
     }
 
+    /// 테스트가 바꿀 수 있는 시계.
+    #[derive(Clone, Default)]
+    struct TestClock(Rc<Cell<u64>>);
+
+    impl Clock for TestClock {
+        fn now_unix(&self) -> u64 {
+            self.0.get()
+        }
+    }
+
     fn session_with(rom: Vec<u8>, store: MemoryStore) -> (Session, Rc<MemoryStore>) {
-        let store = Rc::new(store);
-        let session = Session::load(rom, Box::new(Shared(Rc::clone(&store))), 0).unwrap();
+        let (session, store, _) = session_at(rom, store, 0);
         (session, store)
+    }
+
+    /// 시계가 `now`인 세션. 시계를 돌려주어 테스트가 시간을 옮길 수 있다.
+    fn session_at(
+        rom: Vec<u8>,
+        store: MemoryStore,
+        now: u64,
+    ) -> (Session, Rc<MemoryStore>, TestClock) {
+        let store = Rc::new(store);
+        let clock = TestClock::default();
+        clock.0.set(now);
+        let session = Session::load(
+            rom,
+            Box::new(Shared(Rc::clone(&store))),
+            Box::new(clock.clone()),
+        )
+        .unwrap();
+        (session, store, clock)
     }
 
     /// 제목 "ARAGORN TEST", 0x0100에 `program`을 둔 32KB ROM (기본은 제자리 루프 JR -2).
@@ -301,7 +339,7 @@ mod tests {
     fn rejects_invalid_rom() {
         let store = Box::new(Shared(Rc::new(MemoryStore::default())));
         assert_eq!(
-            Session::load(vec![0; 16], store, 0).err(),
+            Session::load(vec![0; 16], store, Box::new(TestClock::default())).err(),
             Some(CartError::TooSmall(16))
         );
     }
@@ -483,5 +521,59 @@ mod tests {
         session.pump_audio(&mut sink);
         let slow = frames_per_second(&mut session, &mut sink);
         assert!(fast > 48_150.0 && slow < 47_850.0, "{fast} / {slow}");
+    }
+
+    /// MBC3+TIMER+RAM+BATTERY(0x10) 판 `saving_rom(true)`.
+    fn rtc_saving_rom() -> Vec<u8> {
+        let mut rom = saving_rom(true);
+        rom[0x0147] = 0x10;
+        rom
+    }
+
+    /// 세이브 끝 48바이트 RTC 블록의 (시 레지스터, 저장 시각).
+    fn rtc_hours_and_timestamp(save: &[u8]) -> (u8, u64) {
+        let block = &save[save.len() - 48..];
+        (
+            block[8],
+            u64::from_le_bytes(block[40..48].try_into().unwrap()),
+        )
+    }
+
+    #[test]
+    fn rtc_save_records_clock_time() {
+        let (mut session, store, clock) =
+            session_at(rtc_saving_rom(), MemoryStore::default(), 1_000);
+        clock.0.set(5_000);
+        run_frames(&mut session, 1);
+        let saved = store.data.borrow().clone().unwrap();
+        assert_eq!(saved.len(), 0x2000 + 48);
+        assert_eq!(rtc_hours_and_timestamp(&saved).1, 5_000, "저장할 때의 시각");
+    }
+
+    #[test]
+    fn rtc_advances_by_time_the_app_was_closed() {
+        let (mut session, store, _) = session_at(rtc_saving_rom(), MemoryStore::default(), 1_000);
+        run_frames(&mut session, 1);
+        let saved = store.data.borrow().clone().unwrap();
+        let store = MemoryStore {
+            data: RefCell::new(Some(saved)),
+            ..MemoryStore::default()
+        };
+        let (reloaded, _, _) = session_at(rtc_saving_rom(), store, 1_000 + 3 * 3600);
+        assert_eq!(
+            rtc_hours_and_timestamp(&reloaded.battery_ram().unwrap()),
+            (3, 1_000 + 3 * 3600)
+        );
+    }
+
+    #[test]
+    fn save_without_rtc_block_is_not_reported_short() {
+        // M5까지 저장한 금·은·크리스탈 세이브는 RAM만 있다.
+        let store = MemoryStore {
+            data: RefCell::new(Some(vec![0; 0x2000])),
+            ..MemoryStore::default()
+        };
+        let (mut session, _, _) = session_at(rtc_saving_rom(), store, 0);
+        assert!(session.take_errors().is_empty());
     }
 }

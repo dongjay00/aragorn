@@ -11,6 +11,7 @@ mod gameboy;
 pub mod joypad;
 mod model;
 pub mod ppu;
+pub mod rtc;
 pub mod serial;
 pub mod timer;
 
