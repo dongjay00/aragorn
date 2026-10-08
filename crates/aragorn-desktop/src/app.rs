@@ -1,15 +1,17 @@
 use crate::{
-    adapters::{CpalAudio, FsSaveStore, SystemClock, UnavailableUpdater},
+    adapters::{CpalAudio, FsSaveStore, Gamepads, SystemClock, UnavailableUpdater},
     build_info,
     ui::{
-        input,
+        input::{self, InputFrame, Keymap},
         screen::ScreenView,
+        settings::SettingsView,
         update_view::{self, UpdateUiAction},
     },
     update_worker::UpdateWorker,
 };
 use aragorn_app::{
     config::{Config, ConfigStore, UpdateConfig},
+    pacing::{FastForward, RunMode, SpeedControl, UNLIMITED_BUDGET},
     session::Session,
     update::{UpdateCommand, UpdateEvent, UpdateFlow, UpdateSource, Updater},
 };
@@ -46,6 +48,16 @@ pub fn load_session(path: &Path) -> Result<Session, String> {
         .map_err(|e| format!("{name}을(를) 열 수 없습니다: {e}"))
 }
 
+/// 상태 표시줄에 보일 실행 모드. 보통 속도면 표시하지 않는다.
+pub fn mode_text(mode: RunMode) -> Option<String> {
+    match mode {
+        RunMode::Normal => None,
+        RunMode::Paused => Some("일시정지".to_string()),
+        RunMode::Fast(FastForward::Unlimited) => Some("배속 (무제한)".to_string()),
+        RunMode::Fast(speed) => Some(format!("배속 ({})", speed.label())),
+    }
+}
+
 /// 저장하지 못한 진행이 있을 때 ROM 교체·종료를 계속할지 정한다.
 /// 처음에는 멈추고 경고하며, 사용자가 같은 동작을 한 번 더 하면 저장 없이 진행한다.
 pub fn proceed_after_flush(flushed: bool, warned: &mut bool) -> bool {
@@ -77,11 +89,19 @@ pub struct AragornApp {
     /// 세이브 저장 실패를 이미 경고했는지 (`proceed_after_flush`)
     unsaved_warned: bool,
     audio: CpalAudio,
+    gamepads: Gamepads,
+    /// 설정의 키보드 매핑을 egui 키로 바꾼 것. 설정이 바뀌면 다시 만든다.
+    keymap: Keymap,
+    speed: SpeedControl,
+    /// 직전 화면 갱신의 실행 모드 (상태 표시줄용)
+    mode: RunMode,
+    settings: SettingsView,
 }
 
 impl AragornApp {
     pub fn new(ctx: &egui::Context, deps: AppDeps) -> Self {
         let config = deps.config_store.load();
+        let keymap = Keymap::new(&config.input.keyboard);
         let flow = UpdateFlow::new(
             build_info::current_version(),
             config.update.to_prefs(),
@@ -112,6 +132,11 @@ impl AragornApp {
             notice: None,
             unsaved_warned: false,
             audio: CpalAudio::open(),
+            gamepads: Gamepads::open(),
+            keymap,
+            speed: SpeedControl::default(),
+            mode: RunMode::Normal,
+            settings: SettingsView::default(),
         };
         if app.worker.is_some() {
             app.dispatch(UpdateEvent::CheckRequested);
@@ -148,8 +173,49 @@ impl AragornApp {
         }
     }
 
+    /// 게임패드와 키보드 입력을 모은다. 설정 창이 키를 기다리는 중이면 그 키를 지정하고
+    /// 게임에는 입력을 넘기지 않는다(`None`).
+    fn gather_input(&mut self, ctx: &egui::Context) -> Option<InputFrame> {
+        let pad = self.gamepads.poll(&self.config.input.gamepad);
+        for notice in pad.notices {
+            log::info!("{notice}");
+            self.notice = Some(notice);
+        }
+        if self.settings.is_capturing() {
+            let key = ctx.input(|i| {
+                i.events.iter().find_map(|e| match e {
+                    egui::Event::Key {
+                        key,
+                        pressed: true,
+                        repeat: false,
+                        ..
+                    } => Some(*key),
+                    _ => None,
+                })
+            });
+            if self
+                .settings
+                .capture(&mut self.config.input, key, pad.first_pressed)
+            {
+                self.input_config_changed();
+            }
+            return None;
+        }
+        Some(input::gather(
+            &self.keymap,
+            |key| ctx.input(|i| i.key_down(key)),
+            |key| ctx.input(|i| i.key_pressed(key)),
+            &pad.input,
+        ))
+    }
+
+    fn input_config_changed(&mut self) {
+        self.keymap = Keymap::new(&self.config.input.keyboard);
+        self.save_config();
+    }
+
     /// 경과 시간만큼 에뮬레이션을 진행하고 화면을 갱신한다. 강제 업데이트 중에는 멈춘다.
-    fn run_emulation(&mut self, ctx: &egui::Context) {
+    fn run_emulation(&mut self, ctx: &egui::Context, input: Option<InputFrame>) {
         let now = Instant::now();
         let elapsed = now - self.last_tick;
         self.last_tick = now;
@@ -160,10 +226,20 @@ impl AragornApp {
         if self.exit_handled || self.flow.blocks_emulation() {
             return;
         }
-        for (button, pressed) in input::button_states(|key| ctx.input(|i| i.key_down(key))) {
+        let (fast_held, pause_pressed) = input
+            .as_ref()
+            .map_or((false, false), |f| (f.fast_forward, f.pause_pressed));
+        if pause_pressed {
+            self.speed.toggle_pause();
+        }
+        let buttons = input.map_or(gb_core::Button::ALL.map(|b| (b, false)), |f| f.buttons);
+        for (button, pressed) in buttons {
             session.set_button(button, pressed);
         }
-        if session.advance(elapsed) > 0 {
+        self.mode = self.speed.mode(fast_held, self.config.input.fast_forward);
+        let started = Instant::now();
+        let mut within_budget = || started.elapsed() < UNLIMITED_BUDGET;
+        if session.run(elapsed, self.mode, &mut within_budget) > 0 {
             self.screen.update(ctx, session.framebuffer());
         }
         if let Some(sink) = self.audio.sink() {
@@ -261,7 +337,8 @@ impl eframe::App for AragornApp {
         if let Some(path) = dropped {
             self.open_rom(ctx, &path);
         }
-        self.run_emulation(ctx);
+        let input = self.gather_input(ctx);
+        self.run_emulation(ctx, input);
         // 6시간 재확인 타이머가 유휴 상태에서도 돌도록 주기적으로 깨운다.
         ctx.request_repaint_after(Duration::from_secs(60));
     }
@@ -274,6 +351,9 @@ impl eframe::App for AragornApp {
             ui.horizontal(|ui| {
                 if ui.button("ROM 열기").clicked() {
                     open_requested = true;
+                }
+                if ui.button("설정").clicked() {
+                    self.settings.open = !self.settings.open;
                 }
                 ui.separator();
                 let mut auto_download = self.flow.prefs().auto_download;
@@ -298,6 +378,12 @@ impl eframe::App for AragornApp {
 
         egui::Panel::bottom("status").show(ui, |ui| {
             ui.horizontal(|ui| {
+                if self.session.is_some()
+                    && let Some(text) = mode_text(self.mode)
+                {
+                    ui.strong(text);
+                    ui.separator();
+                }
                 if let Some(notice) = &self.notice {
                     ui.label(notice);
                     ui.separator();
@@ -323,6 +409,10 @@ impl eframe::App for AragornApp {
             }
         });
 
+        if self.settings.show(ui.ctx(), &mut self.config.input) {
+            self.input_config_changed();
+        }
+
         for event in events {
             self.dispatch(event);
         }
@@ -340,6 +430,20 @@ impl eframe::App for AragornApp {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mode_text_shows_only_unusual_speeds() {
+        assert_eq!(mode_text(RunMode::Normal), None);
+        assert_eq!(mode_text(RunMode::Paused).as_deref(), Some("일시정지"));
+        assert_eq!(
+            mode_text(RunMode::Fast(FastForward::X4)).as_deref(),
+            Some("배속 (4배)")
+        );
+        assert_eq!(
+            mode_text(RunMode::Fast(FastForward::Unlimited)).as_deref(),
+            Some("배속 (무제한)")
+        );
+    }
 
     #[test]
     fn missing_rom_file_reports_read_error() {

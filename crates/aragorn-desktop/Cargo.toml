@@ -25,6 +25,8 @@ toml = "0.8"
 ureq = "2"
 velopack = "1.2.161"
 cpal = "0.18"
+gilrs = "0.11"
+
 
 [target.'cfg(target_os = "linux")'.dependencies]
 cpal = { version = "0.18", features = ["pulseaudio"] }
