@@ -19,6 +19,8 @@ pub trait CpuBus {
     fn write(&mut self, addr: u16, value: u8);
     /// 주변장치를 1 M-사이클(4 T-사이클) 진행한다.
     fn tick(&mut self);
+    /// STOP 명령. CGB 속도 전환을 처리한다. 저전력 모드는 구현하지 않는다.
+    fn stop(&mut self) {}
 }
 
 pub const IF_ADDR: u16 = 0xFF0F;
@@ -264,9 +266,10 @@ impl Cpu {
         let p = (opcode >> 4) & 3;
         match opcode {
             0x00 => {}
-            // STOP: M1에서는 2바이트 NOP. 저전력 모드와 CGB 속도 전환은 M6에서 구현한다.
+            // STOP: 2바이트 명령. CGB 속도 전환만 하고 저전력 모드는 구현하지 않는다.
             0x10 => {
                 self.fetch8(bus);
+                bus.stop();
             }
             0x76 => self.halt(bus),
             0xCB => {
