@@ -5,3 +5,4 @@
 
 mod channel;
 mod square;
+mod wave;
