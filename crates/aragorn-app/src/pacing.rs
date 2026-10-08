@@ -75,6 +75,11 @@ impl SpeedControl {
         self.paused = !self.paused;
     }
 
+    /// 일시정지한다 (디버거의 브레이크포인트·단계 실행).
+    pub fn pause(&mut self) {
+        self.paused = true;
+    }
+
     pub fn is_paused(&self) -> bool {
         self.paused
     }
@@ -202,5 +207,8 @@ mod tests {
         assert_eq!(c.mode(true, FastForward::X2), RunMode::Paused);
         c.toggle_pause();
         assert_eq!(c.mode(false, FastForward::X2), RunMode::Normal);
+        c.pause();
+        c.pause();
+        assert!(c.is_paused(), "pause는 토글이 아니다");
     }
 }
