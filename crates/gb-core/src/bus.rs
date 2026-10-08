@@ -52,7 +52,7 @@ impl Bus {
         Self {
             cart,
             ppu: Ppu::default(),
-            apu: Apu::new(),
+            apu: Apu::new(false),
             // mooneye boot_div-dmgABCmgb로 맞춘 값: PC=0x0100에서 DIV 내부 카운터 위상.
             timer: Timer::new(0xABC8),
             serial: Serial::default(),
@@ -226,7 +226,7 @@ impl CpuBus for Bus {
         if before && !self.timer.apu_clock_bit() {
             self.apu.frame_sequencer();
         }
-        self.apu.tick();
+        self.apu.tick(4);
         self.if_ |= self.ppu.tick(4);
     }
 }
