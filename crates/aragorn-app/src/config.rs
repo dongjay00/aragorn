@@ -1,3 +1,4 @@
+use crate::input::InputConfig;
 use crate::update::UpdatePrefs;
 use semver::Version;
 use serde::{Deserialize, Serialize};
@@ -6,6 +7,7 @@ use serde::{Deserialize, Serialize};
 #[serde(default)]
 pub struct Config {
     pub update: UpdateConfig,
+    pub input: InputConfig,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -65,6 +67,13 @@ mod tests {
         assert_eq!(c, Config::default());
         let c: Config = serde_json::from_str(r#"{"update":{}}"#).unwrap();
         assert_eq!(c, Config::default());
+    }
+
+    #[test]
+    fn missing_input_section_uses_default_bindings() {
+        let c: Config = serde_json::from_str(r#"{"update":{"auto_download":false}}"#).unwrap();
+        assert_eq!(c.input, InputConfig::default());
+        assert!(!c.update.auto_download);
     }
 
     #[test]
