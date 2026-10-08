@@ -1,5 +1,6 @@
 //! 메모리 버스: 주소 공간 매핑과 주변장치 진행 (Pan Docs "Memory Map").
 
+use crate::apu::{self, Apu};
 use crate::cartridge::Cartridge;
 use crate::cpu::{CpuBus, IE_ADDR, IF_ADDR};
 use crate::joypad::{self, Button, Joypad};
@@ -30,6 +31,7 @@ struct OamDma {
 pub struct Bus {
     cart: Cartridge,
     ppu: Ppu,
+    apu: Apu,
     timer: Timer,
     serial: Serial,
     joypad: Joypad,
@@ -50,6 +52,7 @@ impl Bus {
         Self {
             cart,
             ppu: Ppu::default(),
+            apu: Apu::new(),
             // mooneye boot_div-dmgABCmgb로 맞춘 값: PC=0x0100에서 DIV 내부 카운터 위상.
             timer: Timer::new(0xABC8),
             serial: Serial::default(),
@@ -85,6 +88,10 @@ impl Bus {
         self.cycles
     }
 
+    pub fn apu_mut(&mut self) -> &mut Apu {
+        &mut self.apu
+    }
+
     pub fn ppu(&self) -> &Ppu {
         &self.ppu
     }
@@ -116,6 +123,7 @@ impl Bus {
             serial::SB | serial::SC => self.serial.read(addr),
             timer::DIV..=timer::TAC => self.timer.read(addr),
             IF_ADDR => self.if_ | 0xE0,
+            apu::NR10..=apu::WAVE_RAM_END => self.apu.read(addr),
             DMA => self.dma.reg,
             ppu::LCDC..=ppu::LYC | ppu::BGP..=ppu::WX => self.ppu.read_reg(addr),
             _ => self.io[usize::from(addr - 0xFF00)],
@@ -132,7 +140,14 @@ impl Bus {
                 let irq = self.serial.write(addr, value);
                 self.request(INT_SERIAL, irq);
             }
-            timer::DIV..=timer::TAC => self.timer.write(addr, value),
+            timer::DIV..=timer::TAC => {
+                let before = self.timer.apu_clock_bit();
+                self.timer.write(addr, value);
+                if before && !self.timer.apu_clock_bit() {
+                    self.apu.frame_sequencer();
+                }
+            }
+            apu::NR10..=apu::WAVE_RAM_END => self.apu.write(addr, value),
             IF_ADDR => self.if_ = value & 0x1F,
             DMA => {
                 self.dma.reg = value;
@@ -205,8 +220,13 @@ impl CpuBus for Bus {
     fn tick(&mut self) {
         self.cycles += 1;
         self.tick_dma();
+        let before = self.timer.apu_clock_bit();
         let timer_irq = self.timer.tick();
         self.request(INT_TIMER, timer_irq);
+        if before && !self.timer.apu_clock_bit() {
+            self.apu.frame_sequencer();
+        }
+        self.apu.tick();
         self.if_ |= self.ppu.tick(4);
     }
 }
@@ -419,5 +439,47 @@ mod tests {
         b.set_button(Button::A, true);
         assert_eq!(b.read(IF_ADDR) & INT_JOYPAD, INT_JOYPAD);
         assert_eq!(b.read(joypad::P1) & 0x0F, 0x0E);
+    }
+
+    #[test]
+    fn apu_registers_are_mapped() {
+        let mut b = bus();
+        assert_eq!(b.read(apu::NR52), 0xF1);
+        b.write(0xFF30, 0x5A);
+        assert_eq!(b.read(0xFF30), 0x5A);
+    }
+
+    /// 채널 2를 길이 1로 켠다. 다음 길이 클록에 꺼진다.
+    fn bus_with_short_channel_2() -> Bus {
+        let mut b = bus();
+        b.write(timer::DIV, 0);
+        b.write(0xFF17, 0xF0);
+        b.write(0xFF16, 0x3F);
+        b.write(0xFF19, 0xC0);
+        assert_eq!(b.read(apu::NR52) & 0x02, 0x02);
+        b
+    }
+
+    #[test]
+    fn div_bit_4_falling_edge_clocks_frame_sequencer() {
+        let mut b = bus_with_short_channel_2();
+        // DIV 비트 4(카운터 비트 12)는 8192 T-사이클(2048 M-사이클)마다 1→0으로 떨어진다.
+        for _ in 0..2047 {
+            b.tick();
+        }
+        assert_eq!(b.read(apu::NR52) & 0x02, 0x02);
+        b.tick();
+        assert_eq!(b.read(apu::NR52) & 0x02, 0x00);
+    }
+
+    #[test]
+    fn div_reset_while_bit_4_is_set_clocks_frame_sequencer() {
+        let mut b = bus_with_short_channel_2();
+        for _ in 0..1024 {
+            b.tick();
+        }
+        assert_eq!(b.read(apu::NR52) & 0x02, 0x02);
+        b.write(timer::DIV, 0);
+        assert_eq!(b.read(apu::NR52) & 0x02, 0x00);
     }
 }

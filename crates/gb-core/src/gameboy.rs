@@ -80,6 +80,17 @@ impl GameBoy {
         self.bus.cartridge().ram_enabled()
     }
 
+    /// 소리 출력 샘플레이트(Hz). 프론트엔드가 오디오 버퍼 상태에 맞춰 조금씩 바꾼다(스펙 §4.5).
+    pub fn set_sample_rate(&mut self, rate: f64) {
+        self.bus.apu_mut().set_sample_rate(rate);
+    }
+
+    /// 쌓인 소리를 인터리브 스테레오 f32(-1.0–1.0)로 `out` 뒤에 붙인다.
+    /// 꺼내 가지 않으면 오래된 소리는 버린다(약 1초 분량까지만 남긴다).
+    pub fn drain_audio(&mut self, out: &mut Vec<f32>) {
+        self.bus.apu_mut().drain(out);
+    }
+
     pub fn debug(&self) -> DebugView<'_> {
         DebugView { gb: self }
     }
@@ -253,5 +264,20 @@ mod tests {
             0x10,
             "조이패드 인터럽트 요청"
         );
+    }
+
+    #[test]
+    fn audio_is_produced_at_requested_sample_rate() {
+        let mut gb = gb_with_program(&[0x18, 0xFE]);
+        gb.set_sample_rate(32_000.0);
+        let mut samples = Vec::new();
+        for _ in 0..60 {
+            gb.run_frame();
+            gb.drain_audio(&mut samples);
+        }
+        // 60프레임은 약 1초다. 인터리브 스테레오라 샘플 수는 프레임 수의 두 배다.
+        let frames = samples.len() / 2;
+        assert!((31_500..=32_200).contains(&frames), "{frames}");
+        assert!(samples.iter().all(|s| s.is_finite()));
     }
 }
