@@ -13,6 +13,7 @@ mod model;
 pub mod ppu;
 pub mod rtc;
 pub mod serial;
+pub mod state;
 pub mod timer;
 
 pub use cartridge::{CartError, Header};
@@ -20,3 +21,4 @@ pub use cpu::{IllegalOpcode, Registers};
 pub use gameboy::{DebugView, GameBoy};
 pub use joypad::Button;
 pub use model::Model;
+pub use state::{RomId, StateError};

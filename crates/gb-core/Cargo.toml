@@ -5,6 +5,9 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+serde = { version = "1", features = ["derive"] }
+rmp-serde = "1.3"
 
 [dev-dependencies]
 png = "0.17"
+rmpv = "1.3"
