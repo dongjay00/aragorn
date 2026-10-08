@@ -14,6 +14,48 @@ pub trait SaveStore {
     fn load_battery(&self) -> io::Result<Option<Vec<u8>>>;
     /// 덮어쓰기 전에 이전 세이브를 백업 하나로 남긴다.
     fn save_battery(&self, data: &[u8]) -> io::Result<()>;
+    /// 스테이트 슬롯(0–9)을 읽는다. 비어 있으면 `Ok(None)`.
+    fn load_state(&self, slot: u8) -> io::Result<Option<Vec<u8>>>;
+    /// 스테이트와 썸네일(`THUMBNAIL_WIDTH`×`THUMBNAIL_HEIGHT`, 0xRRGGBBAA)을 슬롯에 쓴다.
+    fn save_state(&self, slot: u8, data: &[u8], thumbnail: &[u32]) -> io::Result<()>;
+    /// 슬롯의 썸네일. 없거나 크기가 맞지 않으면 `Ok(None)`.
+    fn load_thumbnail(&self, slot: u8) -> io::Result<Option<Vec<u32>>>;
+}
+
+/// 스테이트 슬롯 수 (스펙 §5.1). 단축키 F1–F10이 슬롯 0–9다.
+pub const STATE_SLOTS: u8 = 10;
+pub const THUMBNAIL_WIDTH: usize = 80;
+pub const THUMBNAIL_HEIGHT: usize = 72;
+
+/// 화면(160×144)을 썸네일(80×72)로 줄인다. 2×2 픽셀마다 채널별 평균이다.
+pub fn thumbnail(framebuffer: &[u32]) -> Vec<u32> {
+    let width = THUMBNAIL_WIDTH * 2;
+    let mut out = Vec::with_capacity(THUMBNAIL_WIDTH * THUMBNAIL_HEIGHT);
+    for y in 0..THUMBNAIL_HEIGHT {
+        for x in 0..THUMBNAIL_WIDTH {
+            let at = |dx: usize, dy: usize| {
+                framebuffer
+                    .get((y * 2 + dy) * width + x * 2 + dx)
+                    .copied()
+                    .unwrap_or(0)
+            };
+            let pixels = [at(0, 0), at(1, 0), at(0, 1), at(1, 1)];
+            let channel = |shift: u32| {
+                let sum: u32 = pixels.iter().map(|p| (p >> shift) & 0xFF).sum();
+                (sum / 4) << shift
+            };
+            out.push(channel(24) | channel(16) | channel(8) | channel(0));
+        }
+    }
+    out
+}
+
+/// 슬롯 목록에 보일 정보.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SlotInfo {
+    /// 저장 시각(유닉스 초)
+    pub saved_at: u64,
+    pub thumbnail: Option<Vec<u32>>,
 }
 
 /// 현재 시각 (포트). MBC3 RTC 세이브의 저장 시각과 앱이 꺼져 있던 시간 계산에 쓴다.
@@ -186,6 +228,47 @@ impl Session {
         !self.unsaved
     }
 
+    /// 지금 상태를 슬롯에 저장한다. 실패하면 상태 표시줄 문구를 돌려준다.
+    pub fn save_state(&mut self, slot: u8) -> Result<(), String> {
+        let data = self.gb.save_state(self.clock.now_unix());
+        let thumb = thumbnail(self.gb.framebuffer());
+        self.store
+            .save_state(slot, &data, &thumb)
+            .map_err(|e| format!("슬롯 {}에 저장하지 못했습니다: {e}", slot + 1))
+    }
+
+    /// 슬롯의 스테이트를 불러온다. 외부 RAM(게임 세이브)도 스테이트의 것으로 되돌아간다.
+    /// 아직 디스크에 쓰지 않은 게임 세이브가 있으면 먼저 쓰고, 쓰지 못하면 불러오지 않는다.
+    /// 실패하면 지금 게임은 그대로이고 상태 표시줄 문구를 돌려준다.
+    pub fn load_state(&mut self, slot: u8) -> Result<(), String> {
+        let n = slot + 1;
+        let data = match self.store.load_state(slot) {
+            Ok(Some(data)) => data,
+            Ok(None) => return Err(format!("슬롯 {n}이(가) 비어 있습니다")),
+            Err(e) => return Err(format!("슬롯 {n}을(를) 읽을 수 없습니다: {e}")),
+        };
+        if !self.flush() {
+            return Err("게임 세이브를 저장하지 못해 스테이트를 불러오지 않았습니다".to_string());
+        }
+        self.gb
+            .load_state(&data, self.clock.now_unix())
+            .map_err(|e| format!("슬롯 {n}: {e}"))?;
+        self.pacer.reset();
+        self.idle_frames = 0;
+        self.audio.clear();
+        Ok(())
+    }
+
+    /// 슬롯 목록에 보일 정보. 비었거나 읽을 수 없는 슬롯은 `None`.
+    pub fn slot_info(&self, slot: u8) -> Option<SlotInfo> {
+        let data = self.store.load_state(slot).ok()??;
+        let header = gb_core::state::peek(&data).ok()?;
+        Some(SlotInfo {
+            saved_at: header.saved_at,
+            thumbnail: self.store.load_thumbnail(slot).ok().flatten(),
+        })
+    }
+
     /// 쌓인 오류 문구를 꺼낸다.
     pub fn take_errors(&mut self) -> Vec<String> {
         std::mem::take(&mut self.errors)
@@ -243,8 +326,11 @@ mod tests {
     use crate::pacing::{FRAME_DURATION, FastForward};
     use std::{
         cell::{Cell, RefCell},
+        collections::HashMap,
         rc::Rc,
     };
+
+    type Slot = (Vec<u8>, Vec<u32>);
 
     /// 테스트용 메모리 저장소. 저장 시도 횟수와 실패 여부를 조절할 수 있다.
     #[derive(Default)]
@@ -253,6 +339,8 @@ mod tests {
         save_attempts: Cell<u32>,
         fail_load: bool,
         fail_save: Cell<bool>,
+        /// 슬롯별 (스테이트, 썸네일)
+        states: RefCell<HashMap<u8, Slot>>,
     }
 
     struct Shared(Rc<MemoryStore>);
@@ -272,6 +360,22 @@ mod tests {
             }
             *self.0.data.borrow_mut() = Some(data.to_vec());
             Ok(())
+        }
+
+        fn load_state(&self, slot: u8) -> io::Result<Option<Vec<u8>>> {
+            Ok(self.0.states.borrow().get(&slot).map(|(d, _)| d.clone()))
+        }
+
+        fn save_state(&self, slot: u8, data: &[u8], thumbnail: &[u32]) -> io::Result<()> {
+            self.0
+                .states
+                .borrow_mut()
+                .insert(slot, (data.to_vec(), thumbnail.to_vec()));
+            Ok(())
+        }
+
+        fn load_thumbnail(&self, slot: u8) -> io::Result<Option<Vec<u32>>> {
+            Ok(self.0.states.borrow().get(&slot).map(|(_, t)| t.clone()))
         }
     }
 
@@ -635,6 +739,117 @@ mod tests {
             "보통 속도로 돌아오면 한 프레임 분량만 낸다: {}",
             sink.received.len()
         );
+    }
+
+    #[test]
+    fn thumbnail_averages_2x2_blocks() {
+        let mut screen = vec![0u32; 160 * 144];
+        screen[0] = 0xFF00_0000;
+        screen[1] = 0x0000_00FF;
+        screen[160] = 0xFF00_0000;
+        screen[161] = 0x0000_00FF;
+        screen[160 * 144 - 1] = 0x0404_0404;
+        let thumb = thumbnail(&screen);
+        assert_eq!(thumb.len(), THUMBNAIL_WIDTH * THUMBNAIL_HEIGHT);
+        assert_eq!(thumb[0], 0x7F00_007F);
+        assert_eq!(thumb[thumb.len() - 1], 0x0101_0101);
+    }
+
+    #[test]
+    fn state_slot_restores_game_ram_without_touching_save_file() {
+        let (mut session, store) = session_with(saving_rom(true), MemoryStore::default());
+        session.save_state(3).unwrap();
+        run_frames(&mut session, 2);
+        assert_eq!(session.battery_ram().unwrap()[0], 0x42);
+        assert_eq!(store.save_attempts.get(), 1);
+        session.load_state(3).unwrap();
+        assert_eq!(
+            session.battery_ram().unwrap()[0],
+            0x00,
+            "스테이트의 외부 RAM"
+        );
+        assert_eq!(
+            store.data.borrow().as_ref().unwrap()[0],
+            0x42,
+            "세이브 파일은 그대로"
+        );
+        assert_eq!(
+            store.save_attempts.get(),
+            1,
+            "불러오기만으로는 저장하지 않는다"
+        );
+    }
+
+    #[test]
+    fn loading_after_save_point_does_not_rewrite_save_file() {
+        let (mut session, store) = session_with(saving_rom(true), MemoryStore::default());
+        run_frames(&mut session, 2);
+        session.save_state(0).unwrap();
+        session.load_state(0).unwrap();
+        run_frames(&mut session, 120);
+        assert_eq!(store.save_attempts.get(), 1);
+    }
+
+    #[test]
+    fn empty_or_foreign_slot_reports_and_keeps_game() {
+        let (mut session, _) = session_with(saving_rom(true), MemoryStore::default());
+        assert_eq!(
+            session.load_state(4).unwrap_err(),
+            "슬롯 5이(가) 비어 있습니다"
+        );
+        let store = MemoryStore::default();
+        let other = GameBoy::new(looping_rom(), Model::Auto).unwrap();
+        let mut foreign = other.save_state(0);
+        foreign[17] ^= 0xFF; // 제목 첫 글자를 바꾼다
+        store.states.borrow_mut().insert(0, (foreign, Vec::new()));
+        let (mut session, _) = session_with(saving_rom(true), store);
+        run_frames(&mut session, 2);
+        let err = session.load_state(0).unwrap_err();
+        assert!(err.starts_with("슬롯 1: 다른 게임"), "{err}");
+        assert_eq!(session.battery_ram().unwrap()[0], 0x42);
+    }
+
+    #[test]
+    fn unsaved_game_progress_blocks_state_loading() {
+        let store = MemoryStore::default();
+        store.fail_save.set(true);
+        let (mut session, store) = session_with(saving_rom(true), store);
+        session.save_state(0).unwrap();
+        run_frames(&mut session, 2);
+        assert!(session.load_state(0).is_err());
+        assert_eq!(session.battery_ram().unwrap()[0], 0x42, "불러오지 않았다");
+        store.fail_save.set(false);
+        session.load_state(0).unwrap();
+        assert_eq!(
+            store.data.borrow().as_ref().unwrap()[0],
+            0x42,
+            "먼저 저장했다"
+        );
+    }
+
+    #[test]
+    fn slot_info_shows_save_time_and_thumbnail() {
+        let (mut session, _, clock) = session_at(looping_rom(), MemoryStore::default(), 5_000);
+        assert_eq!(session.slot_info(2), None);
+        session.save_state(2).unwrap();
+        clock.0.set(9_000);
+        let info = session.slot_info(2).unwrap();
+        assert_eq!(info.saved_at, 5_000);
+        assert_eq!(
+            info.thumbnail.map(|t| t.len()),
+            Some(THUMBNAIL_WIDTH * THUMBNAIL_HEIGHT)
+        );
+    }
+
+    #[test]
+    fn state_loading_advances_rtc_by_clock() {
+        let (mut session, _, clock) = session_at(rtc_saving_rom(), MemoryStore::default(), 1_000);
+        session.save_state(0).unwrap();
+        clock.0.set(1_000 + 3 * 60);
+        session.load_state(0).unwrap();
+        let ram = session.battery_ram().unwrap();
+        let rtc = &ram[0x2000..];
+        assert_eq!((rtc[0], rtc[4]), (0, 3), "3분 진행");
     }
 
     /// MBC3+TIMER+RAM+BATTERY(0x10) 판 `saving_rom(true)`.
