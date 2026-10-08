@@ -18,6 +18,9 @@ pub const NR10: u16 = 0xFF10;
 pub const NR52: u16 = 0xFF26;
 pub const WAVE_RAM: u16 = 0xFF30;
 pub const WAVE_RAM_END: u16 = 0xFF3F;
+/// CGB: 채널 1·2, 3·4의 현재 디지털 출력(각 4비트).
+pub const PCM12: u16 = 0xFF76;
+pub const PCM34: u16 = 0xFF77;
 
 /// FF10–FF2F를 읽을 때 1로 보이는 비트 (쓰기 전용 비트와 빈 레지스터).
 const READ_MASK: [u8; 0x20] = [
@@ -31,6 +34,7 @@ const READ_MASK: [u8; 0x20] = [
 
 #[derive(Debug, Clone)]
 pub struct Apu {
+    cgb: bool,
     power: bool,
     sweep: Sweep,
     ch1: Square,
@@ -46,14 +50,15 @@ pub struct Apu {
 
 impl Default for Apu {
     fn default() -> Self {
-        Self::new()
+        Self::new(false)
     }
 }
 
 impl Apu {
     /// 부트 ROM이 끝난 직후 상태 (Pan Docs "Power Up Sequence"): 채널 1이 부트 효과음을 마친 채 켜져 있다.
-    pub fn new() -> Self {
+    pub fn new(cgb: bool) -> Self {
         let mut apu = Self {
+            cgb,
             power: true,
             sweep: Sweep::default(),
             ch1: Square::default(),
@@ -68,12 +73,15 @@ impl Apu {
         apu.write(0xFF11, 0xBF);
         apu.write(0xFF12, 0xF3);
         apu.ch1.enabled = true;
+        apu.ch3.cgb = cgb;
         apu
     }
 
     pub fn read(&self, addr: u16) -> u8 {
         match addr {
             WAVE_RAM..=WAVE_RAM_END => self.ch3.read_ram(usize::from(addr - WAVE_RAM)),
+            PCM12 => digital(self.ch2.output()) << 4 | digital(self.ch1.output()),
+            PCM34 => digital(self.ch4.output()) << 4 | digital(self.ch3.output()),
             NR52 => {
                 u8::from(self.power) << 7
                     | 0x70
@@ -113,11 +121,11 @@ impl Apu {
             WAVE_RAM..=WAVE_RAM_END => self.ch3.write_ram(usize::from(addr - WAVE_RAM), value),
             NR52 => self.write_power(value & 0x80 != 0),
             _ if self.power => self.write_reg(addr, value),
-            // DMG: 전원이 꺼져 있어도 길이 카운터는 쓸 수 있다.
-            0xFF11 => self.ch1.length.load(value, 64),
-            0xFF16 => self.ch2.length.load(value, 64),
-            0xFF1B => self.ch3.length.load(value, 256),
-            0xFF20 => self.ch4.length.load(value, 64),
+            // DMG: 전원이 꺼져 있어도 길이 카운터는 쓸 수 있다. CGB는 무시한다.
+            0xFF11 if !self.cgb => self.ch1.length.load(value, 64),
+            0xFF16 if !self.cgb => self.ch2.length.load(value, 64),
+            0xFF1B if !self.cgb => self.ch3.length.load(value, 256),
+            0xFF20 if !self.cgb => self.ch4.length.load(value, 64),
             _ => {}
         }
     }
@@ -200,7 +208,7 @@ impl Apu {
         }
     }
 
-    /// NR52 비트 7. 끄면 레지스터가 모두 지워지고(DMG는 길이 카운터와 웨이브 RAM이 남는다),
+    /// NR52 비트 7. 끄면 레지스터가 모두 지워지고(웨이브 RAM은 남고, DMG는 길이 카운터도 남는다),
     /// 켜면 프레임 시퀀서가 0단계부터 다시 시작한다.
     fn write_power(&mut self, on: bool) {
         if self.power && !on {
@@ -217,10 +225,12 @@ impl Apu {
             self.ch4 = Noise::default();
             self.nr50 = 0;
             self.nr51 = 0;
-            self.ch1.length.counter = lengths[0];
-            self.ch2.length.counter = lengths[1];
-            self.ch3.length.counter = lengths[2];
-            self.ch4.length.counter = lengths[3];
+            if !self.cgb {
+                self.ch1.length.counter = lengths[0];
+                self.ch2.length.counter = lengths[1];
+                self.ch3.length.counter = lengths[2];
+                self.ch4.length.counter = lengths[3];
+            }
         } else if !self.power && on {
             self.fs_step = 0;
             self.ch1.step = 0;
@@ -261,9 +271,9 @@ impl Apu {
         }
     }
 
-    /// 1 M-사이클(4 T-사이클) 진행하고 믹서에 출력 값을 하나 넘긴다.
-    pub fn tick(&mut self) {
-        for _ in 0..4 {
+    /// `t_cycles` T-사이클(1 M-사이클: 보통 4, CGB 2배속은 2) 진행하고 믹서에 출력 값을 하나 넘긴다.
+    pub fn tick(&mut self, t_cycles: u32) {
+        for _ in 0..t_cycles {
             self.ch3.tick();
             if self.power {
                 self.ch1.tick();
@@ -272,7 +282,7 @@ impl Apu {
             }
         }
         let (left, right) = self.output();
-        self.mixer.push(left, right);
+        self.mixer.push(left, right, t_cycles);
     }
 
     /// NR51 패닝과 NR50 마스터 볼륨을 적용한 왼쪽·오른쪽 값. 채널 4개가 모두 최대일 때 ±1.0 안에 든다.
@@ -309,13 +319,18 @@ impl Apu {
     }
 }
 
+/// PCM12/PCM34에 보이는 4비트 값. DAC가 꺼진 채널은 0이다.
+fn digital(output: Option<u8>) -> u8 {
+    output.unwrap_or(0)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn post_boot_registers() {
-        let apu = Apu::new();
+        let apu = Apu::new(false);
         assert_eq!(apu.read(NR52), 0xF1);
         assert_eq!(apu.read(0xFF11), 0xBF);
         assert_eq!(apu.read(0xFF12), 0xF3);
@@ -325,7 +340,7 @@ mod tests {
 
     #[test]
     fn write_only_bits_read_as_one() {
-        let mut apu = Apu::new();
+        let mut apu = Apu::new(false);
         apu.write(0xFF13, 0x12);
         apu.write(0xFF1C, 0x60);
         assert_eq!(apu.read(0xFF13), 0xFF);
@@ -335,7 +350,7 @@ mod tests {
 
     #[test]
     fn power_off_clears_registers_and_ignores_writes() {
-        let mut apu = Apu::new();
+        let mut apu = Apu::new(false);
         apu.write(0xFF30, 0x5A);
         apu.write(NR52, 0x00);
         assert_eq!(apu.read(NR52), 0x70);
@@ -347,7 +362,7 @@ mod tests {
 
     #[test]
     fn length_can_be_written_while_powered_off() {
-        let mut apu = Apu::new();
+        let mut apu = Apu::new(false);
         apu.write(NR52, 0x00);
         apu.write(0xFF16, 0x3E); // 길이 2
         apu.write(NR52, 0x80);
@@ -362,7 +377,7 @@ mod tests {
 
     #[test]
     fn trigger_with_dac_off_does_not_enable_channel() {
-        let mut apu = Apu::new();
+        let mut apu = Apu::new(false);
         apu.write(0xFF21, 0x00);
         apu.write(0xFF23, 0x80);
         assert_eq!(apu.read(NR52) & 0x08, 0);
@@ -370,14 +385,14 @@ mod tests {
 
     #[test]
     fn panning_routes_channel_to_one_side() {
-        let mut apu = Apu::new();
+        let mut apu = Apu::new(false);
         apu.write(0xFF25, 0x02); // 채널 2 → 오른쪽만
         apu.write(0xFF16, 0xC0); // 듀티 75%
         apu.write(0xFF17, 0xF0);
         apu.write(0xFF18, 0xFF);
         apu.write(0xFF19, 0x87); // 주기 값 2047: 듀티 단계당 4 T-사이클
         for _ in 0..100 {
-            apu.tick();
+            apu.tick(4);
         }
         let (left, right) = apu.output();
         assert_eq!(left, 0.0);
@@ -387,7 +402,7 @@ mod tests {
     #[test]
     fn square_wave_pitch_matches_frequency_register() {
         // 주기 값 1750: 131072 / (2048 - 1750) ≈ 439.8 Hz
-        let mut apu = Apu::new();
+        let mut apu = Apu::new(false);
         apu.write(0xFF25, 0x22);
         apu.write(0xFF16, 0x80); // 50%
         apu.write(0xFF17, 0xF0);
@@ -396,7 +411,66 @@ mod tests {
         let mut rising = 0;
         let mut last = 0.0;
         for _ in 0..1_048_576 {
-            apu.tick();
+            apu.tick(4);
+            let (_, right) = apu.output();
+            if right > 0.0 && last == 0.0 {
+                rising += 1;
+            }
+            last = right;
+        }
+        assert!((439..=441).contains(&rising), "{rising}");
+    }
+
+    #[test]
+    fn cgb_power_off_clears_lengths_and_ignores_length_writes() {
+        let mut apu = Apu::new(true);
+        apu.write(0xFF16, 0x3E); // 길이 2
+        apu.write(NR52, 0x00);
+        apu.write(0xFF16, 0x3F); // 꺼져 있으면 무시
+        apu.write(NR52, 0x80);
+        apu.write(0xFF17, 0xF0);
+        apu.write(0xFF19, 0xC0); // 길이 0이라 트리거가 64로 채운다
+        for _ in 0..2 * 63 - 1 {
+            apu.frame_sequencer();
+        }
+        assert_eq!(
+            apu.read(NR52) & 0x02,
+            0x02,
+            "64번째 길이 클록 전까지 켜져 있다"
+        );
+    }
+
+    #[test]
+    fn pcm_registers_show_digital_outputs() {
+        let mut apu = Apu::new(true);
+        apu.write(0xFF16, 0xC0); // 듀티 75%
+        apu.write(0xFF17, 0xF0);
+        apu.write(0xFF18, 0xFF);
+        apu.write(0xFF19, 0x87);
+        for _ in 0..100 {
+            apu.tick(4);
+        }
+        assert_eq!(
+            apu.read(PCM12),
+            0xF0,
+            "채널 2 볼륨 15, 채널 1은 부트 직후 볼륨 0"
+        );
+        assert_eq!(apu.read(PCM34), 0x00);
+    }
+
+    #[test]
+    fn double_speed_ticks_keep_pitch() {
+        // 2배속 M-사이클(2 T-사이클)로 1초를 돌려도 같은 높이(약 440 Hz)가 나온다.
+        let mut apu = Apu::new(true);
+        apu.write(0xFF25, 0x22);
+        apu.write(0xFF16, 0x80);
+        apu.write(0xFF17, 0xF0);
+        apu.write(0xFF18, (1750 & 0xFF) as u8);
+        apu.write(0xFF19, 0x80 | (1750 >> 8) as u8);
+        let mut rising = 0;
+        let mut last = 0.0;
+        for _ in 0..2 * 1_048_576 {
+            apu.tick(2);
             let (_, right) = apu.output();
             if right > 0.0 && last == 0.0 {
                 rising += 1;

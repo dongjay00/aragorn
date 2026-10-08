@@ -1,7 +1,7 @@
 //! M-사이클마다 나온 스테레오 값을 출력 샘플레이트로 평균 다운샘플링하고 DC를 제거한다.
 
 /// 1초에 진행하는 M-사이클 수.
-const M_CYCLES_PER_SEC: f64 = 1_048_576.0;
+const T_CYCLES_PER_SEC: f64 = 4_194_304.0;
 pub const DEFAULT_SAMPLE_RATE: f64 = 48_000.0;
 /// 내보내지 않은 샘플이 이만큼(48 kHz에서 1초) 쌓이면 모두 버린다. 프론트엔드가 소리를 가져가지 않아도
 /// (헤드리스 테스트) 메모리가 늘지 않게 한다.
@@ -42,19 +42,20 @@ impl Mixer {
         let rate = rate.clamp(8_000.0, 192_000.0);
         self.sample_rate = rate;
         // 실제 기기의 축전기는 T-사이클마다 0.999958배로 방전된다.
-        self.charge = 0.999958f64.powf(4.0 * M_CYCLES_PER_SEC / rate) as f32;
+        self.charge = 0.999958f64.powf(T_CYCLES_PER_SEC / rate) as f32;
     }
 
-    /// M-사이클 하나의 왼쪽·오른쪽 값(-1.0–1.0).
-    pub fn push(&mut self, left: f32, right: f32) {
-        self.sum.0 += left;
-        self.sum.1 += right;
-        self.count += 1;
-        self.phase += self.sample_rate;
-        if self.phase < M_CYCLES_PER_SEC {
+    /// `t_cycles` T-사이클 동안 유지된 왼쪽·오른쪽 값(-1.0–1.0). 보통 4이고 CGB 2배속에서는 2다.
+    pub fn push(&mut self, left: f32, right: f32, t_cycles: u32) {
+        let weight = t_cycles as f32;
+        self.sum.0 += left * weight;
+        self.sum.1 += right * weight;
+        self.count += t_cycles;
+        self.phase += self.sample_rate * f64::from(t_cycles);
+        if self.phase < T_CYCLES_PER_SEC {
             return;
         }
-        self.phase -= M_CYCLES_PER_SEC;
+        self.phase -= T_CYCLES_PER_SEC;
         let n = self.count as f32;
         let left = self.high_pass(self.sum.0 / n, 0);
         let right = self.high_pass(self.sum.1 / n, 1);
@@ -88,12 +89,14 @@ impl Mixer {
 mod tests {
     use super::*;
 
+    const M_CYCLES_PER_SEC: f64 = T_CYCLES_PER_SEC / 4.0;
+
     #[test]
     fn one_second_produces_sample_rate_frames() {
         let mut mixer = Mixer::default();
         mixer.set_sample_rate(44_100.0);
         for _ in 0..M_CYCLES_PER_SEC as u32 {
-            mixer.push(0.0, 0.0);
+            mixer.push(0.0, 0.0, 4);
         }
         let mut out = Vec::new();
         mixer.drain(&mut out);
@@ -106,7 +109,7 @@ mod tests {
     fn constant_input_decays_to_zero() {
         let mut mixer = Mixer::default();
         for _ in 0..M_CYCLES_PER_SEC as u32 {
-            mixer.push(0.5, -0.5);
+            mixer.push(0.5, -0.5, 4);
         }
         let mut out = Vec::new();
         mixer.drain(&mut out);
@@ -119,10 +122,22 @@ mod tests {
     fn undrained_samples_are_capped() {
         let mut mixer = Mixer::default();
         for _ in 0..3 * M_CYCLES_PER_SEC as u32 {
-            mixer.push(0.0, 0.0);
+            mixer.push(0.0, 0.0, 4);
         }
         let mut out = Vec::new();
         mixer.drain(&mut out);
         assert!(!out.is_empty() && out.len() <= MAX_PENDING);
+    }
+
+    #[test]
+    fn half_length_pushes_produce_the_same_rate() {
+        let mut mixer = Mixer::default();
+        mixer.set_sample_rate(44_100.0);
+        for _ in 0..2 * M_CYCLES_PER_SEC as u32 {
+            mixer.push(0.0, 0.0, 2);
+        }
+        let mut out = Vec::new();
+        mixer.drain(&mut out);
+        assert_eq!(out.len(), 44_100 * 2);
     }
 }

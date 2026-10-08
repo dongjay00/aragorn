@@ -13,6 +13,8 @@ const CORRUPTION_WINDOW: u32 = 2;
 
 #[derive(Debug, Clone)]
 pub struct Wave {
+    /// CGB는 채널이 켜져 있어도 웨이브 RAM(현재 바이트)에 언제나 접근할 수 있고, 다시 트리거해도 망가지지 않는다.
+    pub cgb: bool,
     pub enabled: bool,
     pub dac: bool,
     pub length: Length,
@@ -32,6 +34,7 @@ pub struct Wave {
 impl Default for Wave {
     fn default() -> Self {
         Self {
+            cgb: false,
             enabled: false,
             dac: false,
             length: Length::default(),
@@ -55,6 +58,7 @@ impl Wave {
     /// 전원을 끌 때: 웨이브 RAM만 남기고 모두 지운다.
     pub fn power_off(&mut self) {
         *self = Wave {
+            cgb: self.cgb,
             ram: self.ram,
             ..Wave::default()
         };
@@ -65,12 +69,12 @@ impl Wave {
         self.buffer = 0;
     }
 
-    /// CPU가 보는 웨이브 RAM 칸. 채널이 켜져 있고 지금 읽는 순간이 아니면 `None`.
+    /// CPU가 보는 웨이브 RAM 칸. DMG에서 채널이 켜져 있고 지금 읽는 순간이 아니면 `None`.
     fn cpu_index(&self, index: usize) -> Option<usize> {
         if !self.enabled {
             return Some(index);
         }
-        (self.since_read == 0).then_some(usize::from(self.position / 2))
+        (self.cgb || self.since_read == 0).then_some(usize::from(self.position / 2))
     }
 
     pub fn read_ram(&self, index: usize) -> u8 {
@@ -84,7 +88,7 @@ impl Wave {
     }
 
     pub fn trigger(&mut self) {
-        if self.enabled && self.timer <= CORRUPTION_WINDOW {
+        if !self.cgb && self.enabled && self.timer <= CORRUPTION_WINDOW {
             self.corrupt_ram();
         }
         self.enabled = self.dac;
@@ -199,5 +203,25 @@ mod tests {
         ch.tick();
         ch.trigger();
         assert_eq!(&ch.ram[0..4], &[0x44, 0x55, 0x66, 0x77]);
+    }
+
+    #[test]
+    fn cgb_ram_is_accessible_while_playing() {
+        let mut ch = playing(2047);
+        ch.cgb = true;
+        assert_eq!(ch.read_ram(9), 0x00, "언제나 현재 바이트(0번)");
+        ch.write_ram(9, 0xAB);
+        assert_eq!(ch.ram[0], 0xAB);
+    }
+
+    #[test]
+    fn cgb_retrigger_does_not_corrupt_ram() {
+        let mut ch = playing(2047);
+        ch.cgb = true;
+        for _ in 0..2 + TRIGGER_DELAY + 2 * 8 + 1 {
+            ch.tick();
+        }
+        ch.trigger();
+        assert_eq!(&ch.ram[0..4], &[0x00, 0x11, 0x22, 0x33]);
     }
 }

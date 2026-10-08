@@ -20,7 +20,7 @@ impl GameBoy {
         let model = model.resolve(cart.header().cgb_flag);
         Ok(GameBoy {
             cpu: Cpu::new(Registers::post_boot(model)),
-            bus: Bus::new(cart),
+            bus: Bus::new(cart, model),
             model,
         })
     }
@@ -41,10 +41,10 @@ impl GameBoy {
     /// 다음 VBlank 진입까지 실행한다. 프레임 경계가 오지 않아도(LCD가 꺼져 있거나 게임이
     /// LCD를 계속 껐다 켜는 경우) 한 프레임 분량(70224 T-사이클)이 지나면 반환한다.
     pub fn run_frame(&mut self) {
-        let deadline = self.bus.cycles() + u64::from(ppu::DOTS_PER_FRAME / 4);
+        let deadline = self.bus.dots() + u64::from(ppu::DOTS_PER_FRAME);
         loop {
             self.cpu.step(&mut self.bus);
-            if self.bus.take_frame_ready() || self.bus.cycles() >= deadline {
+            if self.bus.take_frame_ready() || self.bus.dots() >= deadline {
                 return;
             }
         }
@@ -279,5 +279,20 @@ mod tests {
         let frames = samples.len() / 2;
         assert!((31_500..=32_200).contains(&frames), "{frames}");
         assert!(samples.iter().all(|s| s.is_finite()));
+    }
+
+    #[test]
+    fn frames_keep_their_length_in_double_speed() {
+        // LD A,1 ; LDH (0x4D),A ; STOP ; JR -2 (CGB)
+        let mut rom = test_rom(0x00, 0x00, 0xC0);
+        let program = [0x3E, 0x01, 0xE0, 0x4D, 0x10, 0x00, 0x18, 0xFE];
+        rom[0x0100..0x0100 + program.len()].copy_from_slice(&program);
+        let mut gb = GameBoy::new(rom, Model::Auto).unwrap();
+        gb.run_frame();
+        assert_eq!(gb.debug().peek(0xFF4D), 0xFE, "2배속");
+        let before = gb.bus.dots();
+        gb.run_frame();
+        assert_eq!(gb.bus.dots() - before, u64::from(ppu::DOTS_PER_FRAME));
+        assert_eq!(gb.debug().peek(0xFF44), 144);
     }
 }

@@ -73,9 +73,10 @@ impl Timer {
         self.falling_edge(before);
     }
 
-    /// APU 프레임 시퀀서를 구동하는 DIV 비트 4.
-    pub fn apu_clock_bit(&self) -> bool {
-        self.counter & 0x1000 != 0
+    /// APU 프레임 시퀀서를 구동하는 DIV 비트 4. CGB 2배속에서는 비트 5를 써서 512 Hz를 유지한다.
+    pub fn apu_clock_bit(&self, double_speed: bool) -> bool {
+        let bit = if double_speed { 0x2000 } else { 0x1000 };
+        self.counter & bit != 0
     }
 
     /// 1 M-사이클(4 T-사이클) 진행한다. 이번 사이클에 TMA를 다시 실었으면 `true`(타이머 인터럽트 요청).
@@ -216,5 +217,15 @@ mod tests {
         let mut t = Timer::new(0);
         t.write(TAC, 0x05);
         assert_eq!(t.read(TAC), 0xFD);
+    }
+
+    #[test]
+    fn apu_clock_bit_is_div_bit_5_in_double_speed() {
+        let t = Timer::new(0x1000);
+        assert!(t.apu_clock_bit(false));
+        assert!(!t.apu_clock_bit(true));
+        let t = Timer::new(0x2000);
+        assert!(!t.apu_clock_bit(false));
+        assert!(t.apu_clock_bit(true));
     }
 }
