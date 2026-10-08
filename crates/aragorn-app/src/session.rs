@@ -43,9 +43,8 @@ impl Session {
         store: Box<dyn SaveStore>,
         now_unix: u64,
     ) -> Result<Session, CartError> {
-        // CGB 하드웨어(VRAM/WRAM 뱅크, 팔레트)는 M6에서 구현한다. 그 전까지 CGB 플래그가 있는 ROM을
-        // CGB 모드로 시작하면 화면과 메모리가 망가지므로 모두 DMG로 돌린다.
-        let mut gb = GameBoy::new(rom, Model::Dmg)?;
+        // 헤더의 CGB 플래그로 기기를 고른다: 노랑·금·은·크리스탈은 CGB, 레드·블루는 DMG.
+        let mut gb = GameBoy::new(rom, Model::Auto)?;
         let title = gb.header().title.trim().to_string();
         let mut errors = Vec::new();
         let mut store_blocked = false;
@@ -288,13 +287,13 @@ mod tests {
     }
 
     #[test]
-    fn cgb_flagged_rom_runs_as_dmg_until_cgb_support() {
-        // 노랑·금·은처럼 CGB 플래그가 있는 ROM도 CGB 하드웨어(M6)가 생기기 전까지는 DMG로 돌린다.
-        for flag in [0x80, 0xC0] {
+    fn model_follows_cgb_flag() {
+        // 노랑·금·은·크리스탈처럼 CGB 플래그가 있는 ROM은 CGB로, 레드·블루는 DMG로 돈다.
+        for (flag, model) in [(0x00, Model::Dmg), (0x80, Model::Cgb), (0xC0, Model::Cgb)] {
             let mut rom = looping_rom();
             rom[0x0143] = flag;
             let (session, _) = session_with(rom, MemoryStore::default());
-            assert_eq!(session.model(), Model::Dmg, "{flag:#04X}");
+            assert_eq!(session.model(), model, "{flag:#04X}");
         }
     }
 

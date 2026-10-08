@@ -46,6 +46,18 @@ FILES=(
   "dmg_sound/rom_singles/10-wave trigger while on.gb|fa63c8ed7473411e54285d318e33bf23ff6d637ed2caa7555ddeaf80578e3279"
   "dmg_sound/rom_singles/11-regs after power.gb|d27dab46e8b881028723f1975328572d38e25d295289b974cd698916a0be5dab"
   "dmg_sound/rom_singles/12-wave write while on.gb|2efbecd2c6d40928d44f45da4f634626bcd2790165b3949aedfe377c73913774"
+  "cgb_sound/rom_singles/01-registers.gb|8415d6c69f7954e9365a586bac235f5ce39270ece32c09cb8ebbbff043b9852c"
+  "cgb_sound/rom_singles/02-len ctr.gb|a1ccf47375a2bede3077ac85a4903cb037dd8a4c7c85fc5d0c176af52915271f"
+  "cgb_sound/rom_singles/03-trigger.gb|70173be396d14ac955c47aededcee90ba994206cc403273d0bb49ba163ae23ef"
+  "cgb_sound/rom_singles/04-sweep.gb|abfd1f6fa9e6701e46135ac9f5bb5b10a46cde22d0fc34922636aa09a5647483"
+  "cgb_sound/rom_singles/05-sweep details.gb|f51a80c5538fe4b3afbc5c9af0e689a67869b1e2bbb73d4c60a8874826d056cb"
+  "cgb_sound/rom_singles/06-overflow on trigger.gb|5701414d13ba55d25b59d13076e2e9cb59a9da6890595b41464f957605e317c0"
+  "cgb_sound/rom_singles/07-len sweep period sync.gb|47d57ba87c3a93050ee340cf49b9d276e62e9573542b92b1de5fa2f17e3716c1"
+  "cgb_sound/rom_singles/08-len ctr during power.gb|be7948c70946e0b81c178b8778ef1907231e734650062f8fa8cdb1ceb5ac8c65"
+  "cgb_sound/rom_singles/09-wave read while on.gb|9b101c68b2de1930df74c19aaf22cce74d37dd5aade93855c805ecb2e1e83fd3"
+  "cgb_sound/rom_singles/10-wave trigger while on.gb|cbea1771a5384f4d8f8a249056224a750ad5ee4671297836e4ba87e689af2a23"
+  "cgb_sound/rom_singles/11-regs after power.gb|d347dd195a78c2d0f665b94da493a857218f032b014654b84ddb01f7b8e9befc"
+  "cgb_sound/rom_singles/12-wave.gb|7bbd2e78e159de4297f567fec7851f9b90c3076d18d1043af5f30e14bd66cd0a"
 )
 
 for entry in "${FILES[@]}"; do
@@ -92,6 +104,31 @@ for entry in "${ACID2_FILES[@]}"; do
   echo "내려받음: dmg-acid2/$name"
 done
 echo "dmg-acid2 준비 완료: $ACID2_DEST"
+
+# cgb-acid2 (MIT): ROM과 기준 스크린샷
+CGB_ACID2_DEST="$ROOT/tests/roms/cgb-acid2"
+CGB_ACID2_FILES=(
+  "https://github.com/mattcurrie/cgb-acid2/releases/download/v1.1/cgb-acid2.gbc|cgb-acid2.gbc|197fb0bcec544f0400527fc707e0a94f55435974986e6986b424ace5de81720e"
+  "https://raw.githubusercontent.com/mattcurrie/cgb-acid2/04c6ca40cf75b6a93513fe596de4ab797efaff97/img/reference.png|reference-cgb.png|9ea9c262c5383353e77d715d021a0f7c5ccbe438f88082cb225756e50c4fdf01"
+)
+mkdir -p "$CGB_ACID2_DEST"
+for entry in "${CGB_ACID2_FILES[@]}"; do
+  IFS='|' read -r url name expected <<< "$entry"
+  out="$CGB_ACID2_DEST/$name"
+  if [[ -f "$out" && "$(sha256 "$out")" == "$expected" ]]; then
+    continue
+  fi
+  curl -sfL --retry 3 -o "$out.tmp" "$url"
+  actual="$(sha256 "$out.tmp")"
+  if [[ "$actual" != "$expected" ]]; then
+    rm -f "$out.tmp"
+    echo "SHA256 불일치: $name ($actual)" >&2
+    exit 1
+  fi
+  mv "$out.tmp" "$out"
+  echo "내려받음: cgb-acid2/$name"
+done
+echo "cgb-acid2 준비 완료: $CGB_ACID2_DEST"
 
 # mooneye-test-suite 공식 배포본 (MIT)
 MTS_NAME="mts-20240926-1737-443f6e1"
