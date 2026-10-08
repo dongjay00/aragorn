@@ -333,9 +333,17 @@ fn interrupt_wakes_halt_without_ime() {
     cpu.step(&mut bus); // 대기
     assert!(cpu.halted());
     bus.mem[0xFF0F] = 0x01;
-    cpu.step(&mut bus); // 깨어나서 INC A
+    cpu.step(&mut bus); // 깨어난다 (이 사이클이 INC A의 fetch 사이클)
     assert!(!cpu.halted());
+    assert_eq!(
+        (cpu.regs.a, cpu.regs.pc),
+        (0, 0x0101),
+        "명령은 다음 step에서 실행한다"
+    );
+    let cycles = bus.cycles;
+    cpu.step(&mut bus); // INC A
     assert_eq!((cpu.regs.a, cpu.regs.pc), (1, 0x0102));
+    assert_eq!(bus.cycles, cycles, "fetch 사이클은 이미 썼다");
 }
 
 #[test]
@@ -444,7 +452,8 @@ fn halt_with_ime_dispatches_in_the_wake_cycle() {
 
 #[test]
 fn halt_without_ime_wakes_and_executes_in_the_same_cycle() {
-    let (cpu, bus) = run(&[0x76, 0x3C], 2, |_, b| {
+    // HALT, 깨어남(fetch 사이클), INC A 실행 — step은 셋이지만 M-사이클은 둘이다.
+    let (cpu, bus) = run(&[0x76, 0x3C], 3, |_, b| {
         b.mem[0xFFFF] = 0x01;
         b.irq_at = Some((2, 0x01));
     });

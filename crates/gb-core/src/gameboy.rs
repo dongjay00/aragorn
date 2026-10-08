@@ -559,6 +559,31 @@ mod tests {
     }
 
     #[test]
+    fn breakpoint_after_halt_wake_without_ime_hits() {
+        // DI ; XOR A ; LDH (IF),A ; LD A,1 ; LDH (IE),A ; HALT ; NOP(0x0109) ; JR -2
+        // 대기 중인 인터럽트를 지운 뒤 IME=0으로 HALT하고, VBlank이 깨운다.
+        let mut gb = gb_with_program(&[
+            0xF3, 0xAF, 0xE0, 0x0F, 0x3E, 0x01, 0xE0, 0xFF, 0x76, 0x00, 0x18, 0xFE,
+        ]);
+        gb.set_breakpoints(&[0x0109]);
+        for _ in 0..3 {
+            gb.run_frame();
+            if gb.debug().breakpoint_hit().is_some() {
+                break;
+            }
+        }
+        assert_eq!(gb.debug().breakpoint_hit(), Some(0x0109));
+        assert_eq!(gb.debug().registers().pc, 0x0109);
+        assert!(!gb.debug().halted());
+        gb.step_instruction();
+        assert_eq!(
+            gb.debug().registers().pc,
+            0x010A,
+            "멈춘 명령부터 이어서 실행한다"
+        );
+    }
+
+    #[test]
     fn breakpoints_survive_loading_a_state() {
         let mut gb = gb_with_program(&[0x18, 0xFE]);
         let state = gb.save_state(0);

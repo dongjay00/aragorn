@@ -3,7 +3,7 @@ use crate::{
     build_info,
     ui::{
         debugger::{DebugCommand, DebuggerView},
-        input::{self, InputFrame, Keymap},
+        input::{self, InputFrame, Keymap, TypingGuard},
         screen::ScreenView,
         settings::SettingsView,
         state_slots::{self, SlotCommand, SlotsView},
@@ -114,6 +114,7 @@ pub struct AragornApp {
     settings: SettingsView,
     slots: SlotsView,
     debugger: DebuggerView,
+    typing_guard: TypingGuard,
 }
 
 impl AragornApp {
@@ -157,6 +158,7 @@ impl AragornApp {
             settings: SettingsView::default(),
             slots: SlotsView::default(),
             debugger: DebuggerView::default(),
+            typing_guard: TypingGuard::default(),
         };
         if app.worker.is_some() {
             app.dispatch(UpdateEvent::CheckRequested);
@@ -224,12 +226,16 @@ impl AragornApp {
             }
             return None;
         }
-        // 글자 입력칸에 입력하는 동안 키보드는 게임에 넘기지 않는다 (게임패드는 그대로).
+        // 글자 입력칸에 입력하는 동안, 그리고 그때 눌린 키를 뗄 때까지 키보드는 게임에 넘기지 않는다
+        // (게임패드는 그대로).
         let typing = ctx.text_edit_focused();
+        self.typing_guard
+            .update(typing, &ctx.input(|i| i.keys_down.clone()));
+        let guard = &self.typing_guard;
         Some(input::gather(
             &self.keymap,
-            |key| !typing && ctx.input(|i| i.key_down(key)),
-            |key| !typing && ctx.input(|i| input::pressed_once(&i.events, key)),
+            |key| guard.allows(typing, key) && ctx.input(|i| i.key_down(key)),
+            |key| guard.allows(typing, key) && ctx.input(|i| input::pressed_once(&i.events, key)),
             &pad.input,
         ))
     }
@@ -323,9 +329,7 @@ impl AragornApp {
         if session.run(elapsed, self.mode, &mut within_budget) > 0 {
             self.screen.update(ctx, session.framebuffer());
         }
-        if self.mode != RunMode::Paused
-            && let Some(pc) = session.breakpoint_hit()
-        {
+        if let Some(pc) = session.take_breakpoint_stop() {
             self.speed.pause();
             self.mode = RunMode::Paused;
             self.debugger.open = true;

@@ -78,6 +78,8 @@ pub struct Session {
     save_failed: bool,
     /// 기존 세이브를 읽지 못했으면 덮어쓰지 않는다. 새 게임으로 덮으면 원래 진행이 사라진다.
     store_blocked: bool,
+    /// 브레이크포인트에 새로 걸려 멈춘 PC. `take_breakpoint_stop`이 한 번만 꺼내 간다.
+    breakpoint_stop: Option<u16>,
     /// 배속이나 일시정지로 소리를 내지 않는 중인지. 다음 `pump_audio`가 만든 소리를 버린다.
     muted: bool,
     /// 상태 표시줄에 보일 오류 문구.
@@ -129,6 +131,7 @@ impl Session {
             idle_frames: 0,
             save_failed: false,
             store_blocked,
+            breakpoint_stop: None,
             muted: false,
             errors,
             audio: Vec::new(),
@@ -195,7 +198,17 @@ impl Session {
     fn run_one_frame(&mut self) -> bool {
         self.gb.run_frame();
         self.track_battery();
-        self.gb.debug().breakpoint_hit().is_none()
+        let hit = self.gb.debug().breakpoint_hit();
+        if hit.is_some() {
+            self.breakpoint_stop = hit;
+        }
+        hit.is_none()
+    }
+
+    /// 브레이크포인트에 새로 걸려 멈췄으면 그 PC를 한 번만 돌려준다. 프레임을 돌리지 않은 갱신에서는
+    /// 지난 정지를 다시 알리지 않는다.
+    pub fn take_breakpoint_stop(&mut self) -> Option<u16> {
+        self.breakpoint_stop.take()
     }
 
     /// 디버거: 명령 하나를 실행한다(브레이크포인트는 보지 않는다). 소리는 내지 않는다.
@@ -905,6 +918,25 @@ mod tests {
         let (mut session, _) = session_with(nop_rom(), MemoryStore::default());
         session.set_breakpoints(&[0x0200]);
         assert_eq!(session.run(Duration::ZERO, unlimited, &mut || true), 1);
+    }
+
+    #[test]
+    fn breakpoint_stop_is_reported_once() {
+        let (mut session, _) = session_with(nop_rom(), MemoryStore::default());
+        session.set_breakpoints(&[0x0200]);
+        session.advance(FRAME_DURATION);
+        assert_eq!(session.take_breakpoint_stop(), Some(0x0200));
+        assert_eq!(session.take_breakpoint_stop(), None, "한 번만 알린다");
+        // 일시정지했다가 계속: 한 프레임보다 짧은 시간이면 프레임을 돌리지 않는다
+        session.run(FRAME_DURATION, RunMode::Paused, &mut || false);
+        assert_eq!(session.advance(FRAME_DURATION / 2), 0);
+        assert_eq!(
+            session.take_breakpoint_stop(),
+            None,
+            "지난 정지를 다시 알리지 않는다"
+        );
+        assert_eq!(session.advance(FRAME_DURATION), 1);
+        assert_eq!(session.take_breakpoint_stop(), None, "그 자리를 통과했다");
     }
 
     #[test]
