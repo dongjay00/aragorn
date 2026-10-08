@@ -279,7 +279,7 @@ checksum = "330a5ed07fa54e4702c9d6c4174f74427fc0ef6e214bbd677ae50a5099946470"
 
 [[package]]
 name = "aragorn-app"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "ed25519-dalek",
  "gb-core",
@@ -291,7 +291,7 @@ dependencies = [
 
 [[package]]
 name = "aragorn-desktop"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "aragorn-app",
  "cpal",
@@ -1677,7 +1677,7 @@ dependencies = [
 
 [[package]]
 name = "gb-core"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "png 0.17.16",
 ]
@@ -5203,7 +5203,7 @@ checksum = "e450f9b2ed1dff33c94c12589a87338689467b9c4f5d8a5710bd09a847d2c8a7"
 
 [[package]]
 name = "xtask"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "aragorn-app",
  "base64 0.22.1",
