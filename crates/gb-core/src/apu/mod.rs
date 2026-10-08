@@ -4,6 +4,7 @@
 #![allow(dead_code)]
 
 mod channel;
+mod mixer;
 mod noise;
 mod square;
 mod wave;
