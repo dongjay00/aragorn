@@ -1,5 +1,6 @@
 //! 에뮬레이션 세션: 불러온 ROM 하나, 그 실행 속도, 배터리 세이브 (스펙 §5.1).
 
+use crate::audio::{self, AudioSink};
 use crate::pacing::FramePacer;
 use gb_core::{Button, CartError, GameBoy, Model};
 use std::{io, time::Duration};
@@ -30,6 +31,8 @@ pub struct Session {
     store_blocked: bool,
     /// 상태 표시줄에 보일 오류 문구.
     errors: Vec<String>,
+    /// `pump_audio`가 재사용하는 샘플 버퍼.
+    audio: Vec<f32>,
 }
 
 impl Session {
@@ -74,6 +77,7 @@ impl Session {
             save_failed: false,
             store_blocked,
             errors,
+            audio: Vec::new(),
         })
     }
 
@@ -103,6 +107,17 @@ impl Session {
     /// 160×144, 각 픽셀은 0xRRGGBBAA.
     pub fn framebuffer(&self) -> &[u32] {
         self.gb.framebuffer()
+    }
+
+    /// 지금까지 만든 소리를 `sink`로 보내고, 장치 버퍼에 쌓인 양에 맞춰 다음 프레임부터 쓸
+    /// 샘플레이트를 보정한다. `advance` 뒤에 부른다.
+    pub fn pump_audio(&mut self, sink: &mut dyn AudioSink) {
+        self.gb.drain_audio(&mut self.audio);
+        sink.push(&self.audio);
+        self.audio.clear();
+        let rate = sink.sample_rate();
+        let adjust = audio::rate_adjust(sink.fill_ratio());
+        self.gb.set_sample_rate(f64::from(rate) * adjust);
     }
 
     pub fn battery_ram(&self) -> Option<Vec<u8>> {
@@ -238,6 +253,25 @@ mod tests {
         }
         program.extend([0x18, 0xFE]);
         rom_with(0x03, 0x02, &program)
+    }
+
+    /// 받은 샘플을 모으는 오디오 장치. `fill`은 장치 버퍼가 찼다고 보고할 비율이다.
+    struct FakeSink {
+        rate: u32,
+        fill: f32,
+        received: Vec<f32>,
+    }
+
+    impl AudioSink for FakeSink {
+        fn sample_rate(&self) -> u32 {
+            self.rate
+        }
+        fn fill_ratio(&self) -> f32 {
+            self.fill
+        }
+        fn push(&mut self, samples: &[f32]) {
+            self.received.extend_from_slice(samples);
+        }
     }
 
     fn run_frames(session: &mut Session, frames: u32) {
@@ -409,5 +443,46 @@ mod tests {
         let (mut session, _) = session_with(saving_rom(false), store);
         run_frames(&mut session, 1);
         assert!(!session.flush());
+    }
+
+    /// 1초(약 59.7프레임) 동안 만든 스테레오 프레임 수.
+    fn frames_per_second(session: &mut Session, sink: &mut FakeSink) -> f64 {
+        sink.received.clear();
+        let frames = 597;
+        for _ in 0..frames {
+            session.advance(FRAME_DURATION);
+            session.pump_audio(sink);
+        }
+        sink.received.len() as f64 / 2.0 / (f64::from(frames) * FRAME_DURATION.as_secs_f64())
+    }
+
+    #[test]
+    fn audio_follows_device_sample_rate() {
+        let (mut session, _) = session_with(looping_rom(), MemoryStore::default());
+        let mut sink = FakeSink {
+            rate: 44_100,
+            fill: 1.0,
+            received: Vec::new(),
+        };
+        session.pump_audio(&mut sink);
+        let rate = frames_per_second(&mut session, &mut sink);
+        assert!((rate - 44_100.0).abs() < 100.0, "{rate}");
+        assert!(sink.received.iter().all(|s| s.is_finite()));
+    }
+
+    #[test]
+    fn empty_device_buffer_raises_sample_rate() {
+        let (mut session, _) = session_with(looping_rom(), MemoryStore::default());
+        let mut sink = FakeSink {
+            rate: 48_000,
+            fill: 0.0,
+            received: Vec::new(),
+        };
+        session.pump_audio(&mut sink);
+        let fast = frames_per_second(&mut session, &mut sink);
+        sink.fill = 2.0;
+        session.pump_audio(&mut sink);
+        let slow = frames_per_second(&mut session, &mut sink);
+        assert!(fast > 48_150.0 && slow < 47_850.0, "{fast} / {slow}");
     }
 }

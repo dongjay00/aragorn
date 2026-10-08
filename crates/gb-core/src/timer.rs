@@ -73,6 +73,11 @@ impl Timer {
         self.falling_edge(before);
     }
 
+    /// APU 프레임 시퀀서를 구동하는 DIV 비트 4.
+    pub fn apu_clock_bit(&self) -> bool {
+        self.counter & 0x1000 != 0
+    }
+
     /// 1 M-사이클(4 T-사이클) 진행한다. 이번 사이클에 TMA를 다시 실었으면 `true`(타이머 인터럽트 요청).
     pub fn tick(&mut self) -> bool {
         let reloaded = self.reload == Reload::Pending;
