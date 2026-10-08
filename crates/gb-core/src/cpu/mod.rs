@@ -1,6 +1,7 @@
 //! SM83 CPU. 모든 메모리 접근과 내부 지연마다 `CpuBus::tick`을 호출한다 (M-사이클 tick 모델).
 
 pub mod alu;
+pub mod disasm;
 pub mod registers;
 
 #[cfg(test)]
