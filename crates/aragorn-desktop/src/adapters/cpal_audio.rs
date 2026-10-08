@@ -141,16 +141,27 @@ fn build<T: SizedSample + FromSample<f32>>(
                     }
                 }
             },
-            move |e| match e.kind() {
-                ErrorKind::Xrun | ErrorKind::RealtimeDenied => log::debug!("오디오: {e}"),
-                _ => {
+            move |e| {
+                if breaks_stream(e.kind()) {
                     log::warn!("오디오 스트림이 끊겼습니다: {e}");
                     broken.store(true, Ordering::Relaxed);
+                } else {
+                    log::debug!("오디오: {e}");
                 }
             },
             None,
         )
         .map_err(|e| e.to_string())
+}
+
+/// 스트림 오류 뒤 장치를 다시 열어야 하는지. 언더런·실시간 우선순위 거절은 일시적이고,
+/// `DeviceChanged`는 macOS가 스트림을 새 기본 출력으로 이미 옮긴 뒤 알리는 것이다.
+/// Windows는 기본 장치가 바뀌면 `StreamInvalidated`를 보내므로 다시 연다.
+fn breaks_stream(kind: ErrorKind) -> bool {
+    !matches!(
+        kind,
+        ErrorKind::Xrun | ErrorKind::RealtimeDenied | ErrorKind::DeviceChanged
+    )
 }
 
 /// 앱이 쓰는 오디오 출력. 처음에 장치가 없으면 계속 소리 없이 실행한다.
@@ -205,5 +216,33 @@ impl AudioSink for Stream {
 
     fn push(&mut self, samples: &[f32]) {
         self.queue().push(samples);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rerouted_or_glitched_stream_is_kept() {
+        // macOS CoreAudio는 기본 출력이 바뀌면 스트림을 이미 옮긴 뒤 DeviceChanged를 알린다.
+        for kind in [
+            ErrorKind::DeviceChanged,
+            ErrorKind::Xrun,
+            ErrorKind::RealtimeDenied,
+        ] {
+            assert!(!breaks_stream(kind), "{kind:?}");
+        }
+    }
+
+    #[test]
+    fn invalidated_stream_is_reopened() {
+        for kind in [
+            ErrorKind::StreamInvalidated,
+            ErrorKind::DeviceNotAvailable,
+            ErrorKind::BackendError,
+        ] {
+            assert!(breaks_stream(kind), "{kind:?}");
+        }
     }
 }

@@ -8,7 +8,7 @@ pub struct SampleQueue {
     samples: VecDeque<f32>,
     /// 재생을 시작하거나 다시 시작할 때 필요한 샘플 수.
     prime: usize,
-    /// 최대 샘플 수. 넘치는 샘플은 버린다.
+    /// 최대 샘플 수. 넘치면 오래된 샘플을 버리고 최근 `prime`만큼만 남긴다.
     capacity: usize,
     playing: bool,
 }
@@ -28,11 +28,15 @@ impl SampleQueue {
         self.samples.len() / 2
     }
 
-    /// 들어갈 자리만큼만 넣는다. 스테레오 짝이 깨지지 않게 짝수 개 단위로 자른다.
+    /// 샘플을 넣는다. 스테레오 짝이 깨지지 않게 짝수 개 단위로 자른다.
+    /// 넘치면(콜백이 멈췄다 돌아왔거나 장치를 다시 열어 밀린 소리가 한꺼번에 들어오면) 오래된 샘플을
+    /// 버리고 최근 `prime`만큼만 남긴다. 그러지 않으면 늦은 소리가 1분 가까이 이어진다.
     pub fn push(&mut self, samples: &[f32]) {
-        let room = self.capacity.saturating_sub(self.samples.len()) & !1;
-        let take = samples.len().min(room) & !1;
-        self.samples.extend(&samples[..take]);
+        self.samples.extend(&samples[..samples.len() & !1]);
+        if self.samples.len() > self.capacity {
+            let excess = self.samples.len() - self.prime.min(self.capacity);
+            self.samples.drain(..excess);
+        }
     }
 
     /// `out`을 인터리브 스테레오 샘플로 채운다. 모자라면 나머지는 무음이다.
@@ -83,13 +87,24 @@ mod tests {
     }
 
     #[test]
-    fn overflow_is_dropped_in_whole_frames() {
+    fn overflow_keeps_only_newest_prime_frames() {
+        // 콜백이 멈췄거나 장치를 다시 연 뒤 밀린 소리가 들어오면, 오래된 소리를 버리고
+        // 최근 `prime`만큼만 남겨 지연을 바로 목표로 되돌린다.
         let mut queue = SampleQueue::new(1, 2);
         queue.push(&[0.1, 0.2, 0.3, 0.4, 0.5, 0.6]);
+        assert_eq!(queue.queued_frames(), 1);
+        assert_eq!(popped(&mut queue, 2), [0.5, 0.6]);
+    }
+
+    #[test]
+    fn filling_up_to_capacity_keeps_everything() {
+        let mut queue = SampleQueue::new(1, 2);
+        queue.push(&[0.1, 0.2]);
+        queue.push(&[0.3, 0.4]);
         assert_eq!(queue.queued_frames(), 2);
-        queue.push(&[0.7]);
-        assert_eq!(queue.queued_frames(), 2);
-        assert_eq!(popped(&mut queue, 4), [0.1, 0.2, 0.3, 0.4]);
+        queue.push(&[0.5, 0.6]);
+        assert_eq!(queue.queued_frames(), 1);
+        assert_eq!(popped(&mut queue, 2), [0.5, 0.6]);
     }
 
     #[test]
