@@ -22,7 +22,8 @@ pub enum SlotCommand {
     Load(u8),
 }
 
-/// 이번 화면 갱신의 키 입력에서 슬롯 단축키를 찾는다. 키 반복은 세지 않는다.
+/// 이번 화면 갱신의 키 입력에서 슬롯 단축키를 찾는다. 키 반복과 Ctrl·Alt·Cmd 조합(Alt+F4 등)은
+/// 세지 않는다.
 pub fn hotkey(events: &[Event]) -> Option<SlotCommand> {
     events.iter().find_map(|e| match e {
         Event::Key {
@@ -31,7 +32,7 @@ pub fn hotkey(events: &[Event]) -> Option<SlotCommand> {
             repeat: false,
             modifiers,
             ..
-        } => {
+        } if !(modifiers.alt || modifiers.ctrl || modifiers.command || modifiers.mac_cmd) => {
             let slot = SLOT_KEYS.iter().position(|k| k == key)? as u8;
             Some(if modifiers.shift {
                 SlotCommand::Load(slot)
@@ -167,6 +168,26 @@ mod tests {
             hotkey(&[key(Key::F3, true, false)]),
             Some(SlotCommand::Load(2))
         );
+    }
+
+    #[test]
+    fn ctrl_alt_and_command_combinations_are_not_hotkeys() {
+        // Alt+F4(창 닫기) 같은 조합이 슬롯을 덮어쓰면 안 된다.
+        for modifiers in [
+            egui::Modifiers::ALT,
+            egui::Modifiers::CTRL,
+            egui::Modifiers::COMMAND,
+            egui::Modifiers::SHIFT | egui::Modifiers::CTRL,
+        ] {
+            let event = Event::Key {
+                key: Key::F4,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers,
+            };
+            assert_eq!(hotkey(&[event]), None, "{modifiers:?}");
+        }
     }
 
     #[test]

@@ -145,6 +145,13 @@ impl Bus {
     /// 손상된 스테이트 때문에 패닉하지 않게 인덱스로 쓰는 값을 하드웨어 범위로 감싼다.
     fn sanitize(&mut self) {
         self.wram_bank &= 0x07;
+        // OAM DMA: 진행 위치는 OAM 안이어야 하고, 시작 지연은 실제로 최대 2 M-사이클이다.
+        if self.dma.active.is_some_and(|(_, index)| index >= OAM_LEN) {
+            self.dma.active = None;
+        }
+        if let Some((delay, source)) = self.dma.starting {
+            self.dma.starting = Some((delay.min(2), source));
+        }
         self.hdma.source &= 0xFFF0;
         self.hdma.dest &= 0x1FF0;
         self.hdma.remaining &= 0x7F;
@@ -402,6 +409,22 @@ mod tests {
         let mut rom = test_rom(0x00, 0x00, 0x00);
         rom[0x0200] = 0xAB;
         Bus::new(Cartridge::new(rom).unwrap(), Model::Dmg)
+    }
+
+    #[test]
+    fn sanitize_drops_out_of_range_oam_dma() {
+        // 손상된 스테이트: 진행 위치가 OAM 크기(160)를 넘거나 시작 지연이 터무니없이 길다.
+        for active in [Some((0xC000, 0xF0)), Some((0xC000, 0xFFFF))] {
+            let mut b = bus();
+            b.dma.active = active;
+            b.dma.starting = Some((200, 0xC000));
+            b.sanitize();
+            for _ in 0..400 {
+                b.tick();
+            }
+            assert_eq!(b.dma.active, None);
+            assert_eq!(b.dma.starting, None);
+        }
     }
 
     #[test]
