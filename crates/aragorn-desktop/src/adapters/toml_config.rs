@@ -115,6 +115,22 @@ mod tests {
     }
 
     #[test]
+    fn wrong_input_value_type_keeps_rest_of_config() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = store_in(dir.path());
+        fs::create_dir_all(dir.path().join("nested")).unwrap();
+        fs::write(
+            dir.path().join("nested/config.toml"),
+            "[update]\nskipped_version = \"1.0.0\"\n\n[input]\nfast_forward = 4\n\n[input.keyboard]\na = 1\nstart = \"Space\"\n",
+        )
+        .unwrap();
+        let config = store.load();
+        assert_eq!(config.update.skipped_version.as_deref(), Some("1.0.0"));
+        assert_eq!(config.input.keyboard.start, "Space");
+        assert_eq!(config.input.keyboard.a, "X");
+    }
+
+    #[test]
     fn partial_input_section_keeps_other_bindings() {
         use aragorn_app::input::{Action, InputConfig};
         let dir = tempfile::tempdir().unwrap();

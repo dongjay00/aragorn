@@ -215,20 +215,47 @@ impl Default for InputConfig {
 /// `#[serde(default)]` 대신 직접 구현한다.
 mod partial {
     use super::Bindings;
-    use serde::Deserialize;
+    use serde::{Deserialize, Deserializer, de::IgnoredAny};
+
+    /// 타입이 틀린 값(문자열 자리에 숫자 등)은 설정 전체를 버리지 않고 "없음"으로 본다.
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Lenient<T> {
+        Value(T),
+        Other(IgnoredAny),
+    }
+
+    fn lenient<'de, D: Deserializer<'de>, T: Deserialize<'de>>(
+        d: D,
+    ) -> Result<Option<T>, D::Error> {
+        Ok(match Lenient::deserialize(d)? {
+            Lenient::Value(v) => Some(v),
+            Lenient::Other(_) => None,
+        })
+    }
 
     #[derive(Deserialize, Default)]
     #[serde(default)]
     pub struct PartialBindings {
+        #[serde(deserialize_with = "lenient")]
         right: Option<String>,
+        #[serde(deserialize_with = "lenient")]
         left: Option<String>,
+        #[serde(deserialize_with = "lenient")]
         up: Option<String>,
+        #[serde(deserialize_with = "lenient")]
         down: Option<String>,
+        #[serde(deserialize_with = "lenient")]
         a: Option<String>,
+        #[serde(deserialize_with = "lenient")]
         b: Option<String>,
+        #[serde(deserialize_with = "lenient")]
         select: Option<String>,
+        #[serde(deserialize_with = "lenient")]
         start: Option<String>,
+        #[serde(deserialize_with = "lenient")]
         fast_forward: Option<String>,
+        #[serde(deserialize_with = "lenient")]
         pause: Option<String>,
     }
 
@@ -258,9 +285,12 @@ mod partial {
     #[derive(Deserialize, Default)]
     #[serde(default)]
     pub struct PartialInput {
-        pub keyboard: PartialBindings,
-        pub gamepad: PartialBindings,
+        #[serde(deserialize_with = "lenient")]
+        pub keyboard: Option<PartialBindings>,
+        #[serde(deserialize_with = "lenient")]
+        pub gamepad: Option<PartialBindings>,
         /// 모르는 값이면 설정 전체를 버리지 않고 기본 배속을 쓴다.
+        #[serde(deserialize_with = "lenient")]
         pub fast_forward: Option<String>,
     }
 }
@@ -269,8 +299,14 @@ impl<'de> Deserialize<'de> for InputConfig {
     fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
         let p = partial::PartialInput::deserialize(d)?;
         Ok(Self {
-            keyboard: p.keyboard.fill(Bindings::keyboard_default()),
-            gamepad: p.gamepad.fill(Bindings::gamepad_default()),
+            keyboard: p
+                .keyboard
+                .unwrap_or_default()
+                .fill(Bindings::keyboard_default()),
+            gamepad: p
+                .gamepad
+                .unwrap_or_default()
+                .fill(Bindings::gamepad_default()),
             fast_forward: p
                 .fast_forward
                 .as_deref()
@@ -357,6 +393,18 @@ mod tests {
     fn unknown_fast_forward_falls_back_to_default() {
         let c: InputConfig = serde_json::from_str(r#"{"fast_forward":"x8"}"#).unwrap();
         assert_eq!(c, InputConfig::default());
+    }
+
+    #[test]
+    fn wrong_value_types_fall_back_per_item() {
+        let c: InputConfig =
+            serde_json::from_str(r#"{"keyboard":{"a":1,"b":"K"},"gamepad":5,"fast_forward":4}"#)
+                .unwrap();
+        let mut keyboard = Bindings::keyboard_default();
+        keyboard.b = "K".into();
+        assert_eq!(c.keyboard, keyboard);
+        assert_eq!(c.gamepad, Bindings::gamepad_default());
+        assert_eq!(c.fast_forward, FastForward::default());
     }
 
     #[test]

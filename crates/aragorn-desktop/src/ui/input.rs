@@ -1,7 +1,7 @@
 //! 설정의 키 이름을 egui 키로 바꾸고, 키보드와 게임패드 입력을 합친다 (스펙 §6.2).
 
 use aragorn_app::input::{Action, Bindings};
-use eframe::egui::Key;
+use eframe::egui::{Event, Key};
 use gb_core::Button;
 
 /// 설정의 키보드 매핑을 egui 키로 바꾼 것.
@@ -52,6 +52,13 @@ pub struct InputFrame {
     pub pause_pressed: bool,
 }
 
+/// 이번 화면 갱신에 `key`가 새로 눌렸는지. 누르고 있을 때 OS가 보내는 반복 입력은 세지 않는다.
+pub fn pressed_once(events: &[Event], key: Key) -> bool {
+    events
+        .iter()
+        .any(|e| matches!(e, Event::Key { key: k, pressed: true, repeat: false, .. } if *k == key))
+}
+
 /// 키보드나 게임패드 중 하나라도 눌려 있으면 눌린 것으로 본다.
 pub fn gather(
     keymap: &Keymap,
@@ -78,6 +85,7 @@ pub fn gather(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use eframe::egui;
 
     fn pressed(frame: &InputFrame) -> Vec<Button> {
         frame
@@ -133,6 +141,31 @@ mod tests {
         assert_eq!(pressed(&frame), [Button::B, Button::Start]);
         assert!(frame.fast_forward);
         assert!(frame.pause_pressed);
+    }
+
+    fn key_event(key: Key, repeat: bool) -> egui::Event {
+        egui::Event::Key {
+            key,
+            physical_key: None,
+            pressed: true,
+            repeat,
+            modifiers: egui::Modifiers::NONE,
+        }
+    }
+
+    #[test]
+    fn key_repeat_is_not_a_new_press() {
+        assert!(pressed_once(&[key_event(Key::Escape, false)], Key::Escape));
+        assert!(!pressed_once(&[key_event(Key::Escape, true)], Key::Escape));
+        assert!(!pressed_once(&[key_event(Key::Tab, false)], Key::Escape));
+        let released = egui::Event::Key {
+            key: Key::Escape,
+            physical_key: None,
+            pressed: false,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        };
+        assert!(!pressed_once(&[released], Key::Escape));
     }
 
     #[test]

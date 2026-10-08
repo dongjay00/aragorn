@@ -48,6 +48,16 @@ pub fn load_session(path: &Path) -> Result<Session, String> {
         .map_err(|e| format!("{name}을(를) 열 수 없습니다: {e}"))
 }
 
+/// 위젯의 키보드 포커스를 없앤다. 게임 키(Tab=배속, 방향키, Enter=Start)가 egui 포커스 이동과
+/// 버튼 누르기로 새지 않게 설정 창이 닫혀 있을 때 매 화면 갱신마다 부른다.
+pub fn release_widget_focus(ctx: &egui::Context) {
+    ctx.memory_mut(|m| {
+        if let Some(id) = m.focused() {
+            m.surrender_focus(id);
+        }
+    });
+}
+
 /// 상태 표시줄에 보일 실행 모드. 보통 속도면 표시하지 않는다.
 pub fn mode_text(mode: RunMode) -> Option<String> {
     match mode {
@@ -204,7 +214,7 @@ impl AragornApp {
         Some(input::gather(
             &self.keymap,
             |key| ctx.input(|i| i.key_down(key)),
-            |key| ctx.input(|i| i.key_pressed(key)),
+            |key| ctx.input(|i| input::pressed_once(&i.events, key)),
             &pad.input,
         ))
     }
@@ -337,6 +347,9 @@ impl eframe::App for AragornApp {
         if let Some(path) = dropped {
             self.open_rom(ctx, &path);
         }
+        if !self.settings.open {
+            release_widget_focus(ctx);
+        }
         let input = self.gather_input(ctx);
         self.run_emulation(ctx, input);
         // 6시간 재확인 타이머가 유휴 상태에서도 돌도록 주기적으로 깨운다.
@@ -430,6 +443,42 @@ impl eframe::App for AragornApp {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 툴바 버튼 하나를 그리는 화면 갱신을 `key` 입력으로 한 번 돌리고, 버튼이 눌렸는지 돌려준다.
+    /// `guard`면 앱의 `logic()`처럼 그리기 전에 포커스를 없앤다.
+    fn toolbar_frame(ctx: &egui::Context, key: egui::Key, guard: bool) -> bool {
+        let input = egui::RawInput {
+            events: vec![egui::Event::Key {
+                key,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            }],
+            ..Default::default()
+        };
+        let mut clicked = false;
+        let mut output = ctx.run_ui(input, |ui| {
+            if guard {
+                release_widget_focus(ui.ctx());
+            }
+            clicked |= ui.button("ROM 열기").clicked();
+        });
+        output.textures_delta.clear();
+        clicked
+    }
+
+    #[test]
+    fn tab_then_enter_does_not_press_toolbar_button() {
+        // 막지 않으면 Tab(배속)이 버튼에 포커스를 주고 Enter(Start)가 버튼을 누른다.
+        let ctx = egui::Context::default();
+        toolbar_frame(&ctx, egui::Key::Tab, false);
+        assert!(toolbar_frame(&ctx, egui::Key::Enter, false), "재현 확인");
+
+        let ctx = egui::Context::default();
+        toolbar_frame(&ctx, egui::Key::Tab, true);
+        assert!(!toolbar_frame(&ctx, egui::Key::Enter, true));
+    }
 
     #[test]
     fn mode_text_shows_only_unusual_speeds() {
