@@ -34,6 +34,18 @@ FILES=(
   "mem_timing/individual/01-read_timing.gb|52724532c5709e38e947eb429337c124c38bc68f373874435a7460548098b617"
   "mem_timing/individual/02-write_timing.gb|eea92d3f4e95aab5910e0f7080916a3c42a2b8deae1ee5d45d1e3751d648f3f6"
   "mem_timing/individual/03-modify_timing.gb|2e9067c670ff8b45916bf321677ad04a6896d06a057dbcb82ae9f208a1ae9c34"
+  "dmg_sound/rom_singles/01-registers.gb|c6b9fa4b9d9d26919b33ebe78a6ef19ad2df854186cf741ca2746179cc9fc3f1"
+  "dmg_sound/rom_singles/02-len ctr.gb|745544125a5065729cab22494a79f65c3836e4426f89e4cc43d330afe711b413"
+  "dmg_sound/rom_singles/03-trigger.gb|bb11e7266a7143bafb8aa2a73ca70957c6011f36cd4e0b6aaf0678378294e75c"
+  "dmg_sound/rom_singles/04-sweep.gb|58bc14541d91bb020c7761b423825b3432cfde7ee2fa4d1116126e4cb9573c7e"
+  "dmg_sound/rom_singles/05-sweep details.gb|f582ca3a0b2544b9510797d7d4dd56a17f53e000511b0ae88a6353200dcd9167"
+  "dmg_sound/rom_singles/06-overflow on trigger.gb|1a511e95e84ed6fe6077cabf451a98b4e01fdef59cadae3efbc178113eb064b1"
+  "dmg_sound/rom_singles/07-len sweep period sync.gb|56bf5b0c18b996929c9b052ba5a02b450cb619bb6c24cc1d34ea20951c977bf7"
+  "dmg_sound/rom_singles/08-len ctr during power.gb|31cb41f7be106a708ec0bc94f2a9d0b506d247cd591e9d0a2a6a960dc3bf6595"
+  "dmg_sound/rom_singles/09-wave read while on.gb|378b86f6a25daa16855260d7ef0c24e48146ba05df434a0b5413983a1447e875"
+  "dmg_sound/rom_singles/10-wave trigger while on.gb|fa63c8ed7473411e54285d318e33bf23ff6d637ed2caa7555ddeaf80578e3279"
+  "dmg_sound/rom_singles/11-regs after power.gb|d27dab46e8b881028723f1975328572d38e25d295289b974cd698916a0be5dab"
+  "dmg_sound/rom_singles/12-wave write while on.gb|2efbecd2c6d40928d44f45da4f634626bcd2790165b3949aedfe377c73913774"
 )
 
 for entry in "${FILES[@]}"; do
