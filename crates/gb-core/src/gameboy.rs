@@ -2,7 +2,8 @@
 
 use crate::bus::Bus;
 use crate::cartridge::{CartError, Cartridge, Header};
-use crate::cpu::{Cpu, IllegalOpcode, Registers};
+use crate::cpu::{Cpu, IllegalOpcode, Registers, disasm};
+use crate::debugger::Debugger;
 use crate::joypad::Button;
 use crate::model::Model;
 use crate::ppu;
@@ -13,6 +14,9 @@ pub struct GameBoy {
     cpu: Cpu,
     bus: Bus,
     model: Model,
+    /// 브레이크포인트와 실행 흔적. 스테이트에 넣지 않는다.
+    #[serde(skip)]
+    debugger: Debugger,
 }
 
 impl GameBoy {
@@ -24,6 +28,7 @@ impl GameBoy {
             cpu: Cpu::new(Registers::post_boot(model)),
             bus: Bus::new(cart, model),
             model,
+            debugger: Debugger::default(),
         })
     }
 
@@ -37,19 +42,66 @@ impl GameBoy {
 
     /// 명령 하나(또는 인터럽트 디스패치, HALT 대기 1 M-사이클)를 실행한다.
     pub fn step(&mut self) {
+        self.traced_step();
+    }
+
+    /// CPU를 한 번 진행한다. 명령을 실행하는 경우 그 PC를 실행 흔적에 남긴다.
+    fn traced_step(&mut self) {
+        if !self.cpu.halted() && self.cpu.lock().is_none() {
+            self.debugger.record(self.cpu.regs.pc);
+        }
         self.cpu.step(&mut self.bus);
+    }
+
+    /// 다음에 실행할 명령이 브레이크포인트인지. HALT·정지 중에는 명령을 실행하지 않으므로 보지 않는다.
+    fn at_breakpoint(&self) -> bool {
+        !self.cpu.halted()
+            && self.cpu.lock().is_none()
+            && self.debugger.is_breakpoint(self.cpu.regs.pc)
     }
 
     /// 다음 VBlank 진입까지 실행한다. 프레임 경계가 오지 않아도(LCD가 꺼져 있거나 게임이
     /// LCD를 계속 껐다 켜는 경우) 한 프레임 분량(70224 T-사이클)이 지나면 반환한다.
+    ///
+    /// 브레이크포인트 주소의 명령을 실행하기 직전에 멈추고 돌아온다(스펙 §4.3). 그 자리에서 다시
+    /// 부르면 그 명령은 한 번 통과한다.
     pub fn run_frame(&mut self) {
+        let resume = self.debugger.hit();
+        self.debugger.set_hit(None);
         let deadline = self.bus.dots() + u64::from(ppu::DOTS_PER_FRAME);
+        let mut first = true;
         loop {
-            self.cpu.step(&mut self.bus);
+            if self.at_breakpoint() && !(first && resume == Some(self.cpu.regs.pc)) {
+                self.debugger.set_hit(Some(self.cpu.regs.pc));
+                return;
+            }
+            first = false;
+            self.traced_step();
             if self.bus.take_frame_ready() || self.bus.dots() >= deadline {
                 return;
             }
         }
+    }
+
+    /// 디버거의 "명령 1개 실행". 브레이크포인트는 보지 않는다. HALT 중이면 깨어나 다음 명령을 실행할
+    /// 때까지(최대 한 프레임 분량) 진행한다.
+    pub fn step_instruction(&mut self) {
+        self.debugger.set_hit(None);
+        if self.cpu.halted() {
+            let deadline = self.bus.dots() + u64::from(ppu::DOTS_PER_FRAME);
+            while self.cpu.halted() && self.bus.dots() < deadline {
+                self.cpu.step(&mut self.bus);
+            }
+        } else {
+            self.traced_step();
+        }
+        // 단계 실행 중에 지난 VBlank 표시는 버린다. 남겨 두면 다음 `run_frame`이 바로 끝난다.
+        self.bus.take_frame_ready();
+    }
+
+    /// PC 브레이크포인트를 `pcs`로 바꾼다. 빈 목록이면 모두 지운다.
+    pub fn set_breakpoints(&mut self, pcs: &[u16]) {
+        self.debugger.set_breakpoints(pcs);
     }
 
     /// 160×144, 각 픽셀은 0xRRGGBBAA.
@@ -127,6 +179,8 @@ impl GameBoy {
             .bus
             .cartridge_mut()
             .advance_rtc(now_unix.saturating_sub(saved_at));
+        loaded.debugger = std::mem::take(&mut self.debugger);
+        loaded.debugger.reset_run_state();
         *self = loaded;
         Ok(())
     }
@@ -156,6 +210,29 @@ impl<'a> DebugView<'a> {
 
     pub fn peek(&self, addr: u16) -> u8 {
         self.gb.bus.peek(addr)
+    }
+
+    pub fn ime(&self) -> bool {
+        self.gb.cpu.ime()
+    }
+
+    pub fn halted(&self) -> bool {
+        self.gb.cpu.halted()
+    }
+
+    /// 마지막 `run_frame`이 브레이크포인트에 걸려 멈췄으면 그 PC.
+    pub fn breakpoint_hit(&self) -> Option<u16> {
+        self.gb.debugger.hit()
+    }
+
+    /// 최근 실행한 명령의 PC, 오래된 것부터 (최대 `debugger::TRACE_LEN`개).
+    pub fn trace(&self) -> Vec<u16> {
+        self.gb.debugger.trace()
+    }
+
+    /// `addr`의 명령을 해석한다. 메모리를 읽어도 게임 상태는 바뀌지 않는다.
+    pub fn disassemble(&self, addr: u16) -> disasm::Instruction {
+        disasm::disassemble(addr, |a| self.peek(a))
     }
 }
 
@@ -403,6 +480,95 @@ mod tests {
         gb.drain_audio(&mut audio);
         let per_second = audio.len() as f64 / 2.0 / (60.0 * 70_224.0 / 4_194_304.0);
         assert!((per_second - 22_050.0).abs() < 100.0, "{per_second}");
+    }
+
+    #[test]
+    fn breakpoint_stops_before_the_instruction_mid_frame() {
+        // 0x0100부터 NOP만 있다 (ROM의 나머지는 0).
+        let mut gb = gb_with_program(&[]);
+        gb.set_breakpoints(&[0x0200]);
+        gb.run_frame();
+        assert_eq!(gb.debug().registers().pc, 0x0200);
+        assert_eq!(gb.debug().breakpoint_hit(), Some(0x0200));
+        assert_eq!(gb.debug().trace().last(), Some(&0x01FF));
+    }
+
+    #[test]
+    fn resuming_passes_the_breakpoint_once() {
+        let mut gb = gb_with_program(&[]);
+        gb.set_breakpoints(&[0x0200]);
+        gb.run_frame();
+        gb.run_frame();
+        assert_eq!(
+            gb.debug().breakpoint_hit(),
+            None,
+            "직선 코드는 다시 오지 않는다"
+        );
+        assert!(gb.debug().registers().pc > 0x0200);
+    }
+
+    #[test]
+    fn loop_hits_the_breakpoint_every_iteration() {
+        let mut gb = gb_with_program(&[0x18, 0xFE]); // JR -2
+        gb.set_breakpoints(&[0x0100]);
+        gb.run_frame();
+        assert_eq!(gb.debug().breakpoint_hit(), Some(0x0100));
+        assert!(gb.debug().trace().is_empty(), "시작 위치에서 바로 멈춘다");
+        gb.run_frame();
+        assert_eq!(gb.debug().breakpoint_hit(), Some(0x0100));
+        assert_eq!(gb.debug().trace(), [0x0100]);
+    }
+
+    #[test]
+    fn cleared_breakpoints_run_whole_frames() {
+        let mut gb = gb_with_program(&[0x18, 0xFE]);
+        gb.set_breakpoints(&[0x0100]);
+        gb.run_frame();
+        gb.set_breakpoints(&[]);
+        gb.run_frame();
+        assert_eq!(gb.debug().breakpoint_hit(), None);
+        assert_eq!(gb.debug().trace().len(), crate::debugger::TRACE_LEN);
+    }
+
+    #[test]
+    fn step_instruction_runs_one_instruction_ignoring_breakpoints() {
+        let mut gb = gb_with_program(&[0x01, 0x34, 0x12, 0x00]); // LD BC,$1234 ; NOP
+        gb.set_breakpoints(&[0x0103]);
+        gb.step_instruction();
+        assert_eq!(gb.debug().registers().pc, 0x0103);
+        assert_eq!(gb.debug().registers().c, 0x34);
+        gb.step_instruction();
+        assert_eq!(gb.debug().registers().pc, 0x0104);
+        assert_eq!(
+            gb.debug().disassemble(0x0100).text,
+            "LD BC,$1234",
+            "디스어셈블은 게임 메모리를 그대로 읽는다"
+        );
+    }
+
+    #[test]
+    fn step_instruction_while_halted_forever_returns() {
+        // DI ; XOR A ; LDH (IE),A ; HALT — 깨울 인터럽트가 없다
+        let mut gb = gb_with_program(&[0xF3, 0xAF, 0xE0, 0xFF, 0x76]);
+        for _ in 0..4 {
+            gb.step_instruction();
+        }
+        assert!(gb.debug().halted());
+        gb.step_instruction();
+        assert!(gb.debug().halted(), "한 프레임 분량 뒤 돌아온다");
+    }
+
+    #[test]
+    fn breakpoints_survive_loading_a_state() {
+        let mut gb = gb_with_program(&[0x18, 0xFE]);
+        let state = gb.save_state(0);
+        gb.set_breakpoints(&[0x0100]);
+        gb.run_frame();
+        gb.load_state(&state, 0).unwrap();
+        assert_eq!(gb.debug().breakpoint_hit(), None);
+        assert!(gb.debug().trace().is_empty());
+        gb.run_frame();
+        assert_eq!(gb.debug().breakpoint_hit(), Some(0x0100));
     }
 
     #[test]
