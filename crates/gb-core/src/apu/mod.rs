@@ -4,3 +4,4 @@
 #![allow(dead_code)]
 
 mod channel;
+mod square;
