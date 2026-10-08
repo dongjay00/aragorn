@@ -83,14 +83,16 @@ impl Stream {
 }
 
 fn hosts() -> Vec<cpal::Host> {
-    let mut hosts = Vec::new();
     #[cfg(target_os = "linux")]
-    match cpal::host_from_id(cpal::HostId::PulseAudio) {
-        Ok(host) => hosts.push(host),
-        Err(e) => log::info!("PulseAudio를 쓸 수 없습니다: {e}"),
-    }
-    hosts.push(cpal::default_host());
-    hosts
+    let preferred = cpal::host_from_id(cpal::HostId::PulseAudio)
+        .map_err(|e| log::info!("PulseAudio를 쓸 수 없습니다: {e}"))
+        .ok();
+    #[cfg(not(target_os = "linux"))]
+    let preferred = None;
+    preferred
+        .into_iter()
+        .chain(std::iter::once(cpal::default_host()))
+        .collect()
 }
 
 fn build_for_format(
