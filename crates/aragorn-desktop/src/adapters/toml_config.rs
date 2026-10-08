@@ -100,4 +100,51 @@ mod tests {
         assert!(config.update.auto_download);
         assert_eq!(config.update.skipped_version.as_deref(), Some("1.0.0"));
     }
+
+    #[test]
+    fn input_bindings_round_trip_through_toml() {
+        use aragorn_app::{input::Action, pacing::FastForward};
+        let dir = tempfile::tempdir().unwrap();
+        let store = store_in(dir.path());
+        let mut config = Config::default();
+        config.input.keyboard.bind(Action::A, "K");
+        config.input.gamepad.bind(Action::Pause, "Mode");
+        config.input.fast_forward = FastForward::Unlimited;
+        store.save(&config).unwrap();
+        assert_eq!(store.load(), config);
+    }
+
+    #[test]
+    fn wrong_input_value_type_keeps_rest_of_config() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = store_in(dir.path());
+        fs::create_dir_all(dir.path().join("nested")).unwrap();
+        fs::write(
+            dir.path().join("nested/config.toml"),
+            "[update]\nskipped_version = \"1.0.0\"\n\n[input]\nfast_forward = 4\n\n[input.keyboard]\na = 1\nstart = \"Space\"\n",
+        )
+        .unwrap();
+        let config = store.load();
+        assert_eq!(config.update.skipped_version.as_deref(), Some("1.0.0"));
+        assert_eq!(config.input.keyboard.start, "Space");
+        assert_eq!(config.input.keyboard.a, "X");
+    }
+
+    #[test]
+    fn partial_input_section_keeps_other_bindings() {
+        use aragorn_app::input::{Action, InputConfig};
+        let dir = tempfile::tempdir().unwrap();
+        let store = store_in(dir.path());
+        fs::create_dir_all(dir.path().join("nested")).unwrap();
+        fs::write(
+            dir.path().join("nested/config.toml"),
+            "[input]\nfast_forward = \"x8\"\n\n[input.keyboard]\nstart = \"Space\"\n",
+        )
+        .unwrap();
+        let input = store.load().input;
+        assert_eq!(input.keyboard.get(Action::Start), "Space");
+        assert_eq!(input.keyboard.get(Action::A), "X");
+        assert_eq!(input.gamepad, InputConfig::default().gamepad);
+        assert_eq!(input.fast_forward, InputConfig::default().fast_forward);
+    }
 }

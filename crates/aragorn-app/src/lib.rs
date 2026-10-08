@@ -2,6 +2,7 @@
 
 pub mod audio;
 pub mod config;
+pub mod input;
 pub mod pacing;
 pub mod session;
 pub mod update;
