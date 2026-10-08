@@ -113,14 +113,15 @@ impl RtcRegs {
         .map(u32::from)
     }
 
+    /// 세이브 파일 값은 믿지 않고 레지스터 쓰기와 같은 마스크를 씌운다.
     fn from_words(words: &[u8]) -> Self {
         let byte = |i: usize| words[i * 4];
         Self {
-            seconds: byte(0),
-            minutes: byte(1),
-            hours: byte(2),
+            seconds: byte(0) & 0x3F,
+            minutes: byte(1) & 0x3F,
+            hours: byte(2) & 0x1F,
             day_low: byte(3),
-            day_high: byte(4),
+            day_high: byte(4) & (DH_DAY_HIGH | DH_HALT | DH_CARRY),
         }
     }
 }
@@ -361,5 +362,29 @@ mod tests {
         let mut rtc = rtc_at(0, 0, 7, 0);
         assert!(!rtc.load_block(&[0; 10], 100));
         assert_eq!(rtc.regs().seconds, 7);
+    }
+
+    #[test]
+    fn garbage_block_values_are_masked_without_panic() {
+        let mut block = [0xFF; SAVE_BLOCK_LEN];
+        // 정지 비트(0x40)만 끄고 나머지 DH 비트는 모두 켠다. 정지 상태면 경과 시간 계산을 건너뛴다.
+        block[16] = 0xBF;
+        block[36] = 0xBF;
+        block[40..48].copy_from_slice(&0u64.to_le_bytes());
+        let mut rtc = Rtc::default();
+        assert!(rtc.load_block(&block, 100));
+        let regs = rtc.regs();
+        assert!(regs.seconds <= 0x3F && regs.minutes <= 0x3F && regs.hours <= 0x1F);
+        let saved = rtc.save_block(100);
+        assert_eq!(
+            saved[16] & !(DH_DAY_HIGH | DH_HALT | DH_CARRY),
+            0,
+            "DH 사용 안 하는 비트"
+        );
+        assert_eq!(
+            saved[36] & !(DH_DAY_HIGH | DH_HALT | DH_CARRY),
+            0,
+            "래치된 DH"
+        );
     }
 }
