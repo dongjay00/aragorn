@@ -3,6 +3,7 @@
 //! UI, OS, 네트워크에 의존하지 않는다. 이름은 Pan Docs 용어를 따른다.
 //! 앱 계층은 `GameBoy`와 `DebugView`만 쓴다. 하위 모듈은 디버거와 테스트를 위해 공개한다.
 
+pub mod apu;
 pub mod bus;
 pub mod cartridge;
 pub mod cpu;
