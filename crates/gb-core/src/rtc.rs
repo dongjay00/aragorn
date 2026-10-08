@@ -16,7 +16,7 @@ const DH_HALT: u8 = 0x40;
 const DH_CARRY: u8 = 0x80;
 
 /// RTC 레지스터 5개 (S, M, H, DL, DH).
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct RtcRegs {
     pub seconds: u8,
     pub minutes: u8,
@@ -126,7 +126,7 @@ impl RtcRegs {
     }
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct Rtc {
     regs: RtcRegs,
     latched: RtcRegs,

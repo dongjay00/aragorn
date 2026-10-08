@@ -5,7 +5,7 @@ use super::channel::{Envelope, Length};
 /// 듀티별 8단계 파형 (12.5%, 25%, 50%, 75%).
 const DUTY: [u8; 4] = [0b0000_0001, 0b1000_0001, 0b1000_0111, 0b0111_1110];
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct Square {
     pub enabled: bool,
     pub duty: u8,
@@ -18,6 +18,14 @@ pub struct Square {
 }
 
 impl Square {
+    /// 손상된 스테이트 때문에 패닉하지 않게 레지스터 비트 폭을 넘는 값을 감싼다.
+    pub(crate) fn sanitize(&mut self) {
+        self.duty &= 3;
+        self.step &= 7;
+        self.freq &= 0x7FF;
+        self.env.sanitize();
+    }
+
     /// 한 듀티 단계의 길이(T-사이클).
     fn period(&self) -> u32 {
         (2048 - u32::from(self.freq)) * 4
@@ -53,7 +61,7 @@ impl Square {
 }
 
 /// 채널 1 주파수 스윕 (NR10).
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct Sweep {
     period: u8,
     negate: bool,
@@ -66,6 +74,13 @@ pub struct Sweep {
 }
 
 impl Sweep {
+    /// 손상된 스테이트 때문에 패닉하지 않게 레지스터 비트 폭을 넘는 값을 감싼다.
+    pub(crate) fn sanitize(&mut self) {
+        self.period &= 7;
+        self.shift &= 7;
+        self.shadow &= 0x7FF;
+    }
+
     pub fn reg(&self) -> u8 {
         self.period << 4 | u8::from(self.negate) << 3 | self.shift
     }

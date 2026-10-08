@@ -28,7 +28,7 @@ pub const SVBK: u16 = 0xFF70;
 const OAM_LEN: u16 = 0xA0;
 
 /// OAM DMA (Pan Docs "OAM DMA Transfer").
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 struct OamDma {
     /// 마지막으로 쓴 FF46 값.
     reg: u8,
@@ -39,7 +39,7 @@ struct OamDma {
 }
 
 /// CGB VRAM DMA (Pan Docs "VRAM DMA Transfers").
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 struct Hdma {
     source: u16,
     /// VRAM 안의 오프셋(0x0000–0x1FF0).
@@ -50,6 +50,7 @@ struct Hdma {
     hblank: bool,
 }
 
+#[derive(serde::Serialize, serde::Deserialize)]
 pub struct Bus {
     cgb: bool,
     cart: Cartridge,
@@ -59,11 +60,14 @@ pub struct Bus {
     serial: Serial,
     joypad: Joypad,
     /// 뱅크 0–7 (DMG는 0과 1만 쓴다).
+    #[serde(with = "crate::state::bytes::boxed")]
     wram: Box<[u8; 0x8000]>,
     /// SVBK 하위 3비트.
     wram_bank: u8,
+    #[serde(with = "crate::state::bytes")]
     hram: [u8; 0x7F],
     /// 아직 구현하지 않은 I/O 레지스터(0xFF00–0xFF7F)는 쓴 값을 그대로 보관한다.
+    #[serde(with = "crate::state::bytes")]
     io: [u8; 0x80],
     ie: u8,
     if_: u8,
@@ -124,6 +128,27 @@ impl Bus {
         } else {
             usize::from(self.wram_bank.max(1)) * 0x1000 + offset
         }
+    }
+
+    /// 스테이트에서 읽은 버스에 지금 버스의 ROM과 호스트 설정을 옮기고, 인덱스로 쓰는 값을 범위 안으로
+    /// 맞춘다. 다른 기기·카트리지의 상태면 거부한다. `host`는 바꾸지 않는다.
+    pub(crate) fn adopt_host(&mut self, host: &Bus) -> Result<(), String> {
+        if self.cgb != host.cgb {
+            return Err("기기 종류가 다릅니다".into());
+        }
+        self.cart.adopt_rom(&host.cart)?;
+        self.apu.adopt_host(&host.apu);
+        self.sanitize();
+        Ok(())
+    }
+
+    /// 손상된 스테이트 때문에 패닉하지 않게 인덱스로 쓰는 값을 하드웨어 범위로 감싼다.
+    fn sanitize(&mut self) {
+        self.wram_bank &= 0x07;
+        self.hdma.source &= 0xFFF0;
+        self.hdma.dest &= 0x1FF0;
+        self.hdma.remaining &= 0x7F;
+        self.ppu.sanitize();
     }
 
     pub fn cartridge(&self) -> &Cartridge {

@@ -6,7 +6,9 @@ use crate::cpu::{Cpu, IllegalOpcode, Registers};
 use crate::joypad::Button;
 use crate::model::Model;
 use crate::ppu;
+use crate::state::{self, RomId, StateError};
 
+#[derive(serde::Serialize, serde::Deserialize)]
 pub struct GameBoy {
     cpu: Cpu,
     bus: Bus,
@@ -95,6 +97,38 @@ impl GameBoy {
     /// 꺼내 가지 않으면 오래된 소리는 버린다(약 1초 분량까지만 남긴다).
     pub fn drain_audio(&mut self, out: &mut Vec<f32>) {
         self.bus.apu_mut().drain(out);
+    }
+
+    /// 세이브 스테이트가 어느 ROM의 것인지 가리는 값.
+    pub fn rom_id(&self) -> RomId {
+        self.bus.cartridge().rom_id()
+    }
+
+    /// 지금 상태 전체를 스테이트 파일 내용으로 만든다 (스펙 §4.8). ROM은 넣지 않는다.
+    /// `now_unix`는 저장 시각으로 기록되어, 불러올 때 RTC를 실제 시간에 맞추는 데 쓴다.
+    pub fn save_state(&self, now_unix: u64) -> Vec<u8> {
+        state::encode(&self.rom_id(), now_unix, self)
+    }
+
+    /// 스테이트를 불러온다. 다른 ROM·형식·손상된 내용이면 오류를 돌려주고 지금 상태를 그대로 둔다.
+    /// RTC가 있으면 저장 시각부터 `now_unix`까지 지난 시간만큼 시계를 진행한다.
+    /// 소리 출력 샘플레이트는 지금 값을 유지하고, 아직 꺼내지 않은 소리는 버린다.
+    pub fn load_state(&mut self, data: &[u8], now_unix: u64) -> Result<(), StateError> {
+        let (saved_at, body) = state::split(data, &self.rom_id())?;
+        let mut loaded: GameBoy = state::decode(body)?;
+        if loaded.model != self.model {
+            return Err(StateError::Corrupt("기기 종류가 다릅니다".into()));
+        }
+        loaded
+            .bus
+            .adopt_host(&self.bus)
+            .map_err(StateError::Corrupt)?;
+        loaded
+            .bus
+            .cartridge_mut()
+            .advance_rtc(now_unix.saturating_sub(saved_at));
+        *self = loaded;
+        Ok(())
     }
 
     pub fn debug(&self) -> DebugView<'_> {
@@ -256,6 +290,119 @@ mod tests {
         let ram = gb.battery_ram(0).unwrap();
         assert_eq!((ram[0], ram[1], ram[2]), (0x11, 0x22, 0x00));
         assert!(!gb.battery_dirty(), "불러오기는 게임의 쓰기가 아니다");
+    }
+
+    #[test]
+    fn state_round_trips_ram_registers_and_screen() {
+        let mut gb = GameBoy::new(saving_rom(), Model::Dmg).unwrap();
+        gb.run_frame();
+        let state = gb.save_state(0);
+        let registers = gb.debug().registers();
+        let mut other = GameBoy::new(saving_rom(), Model::Dmg).unwrap();
+        other.load_state(&state, 0).unwrap();
+        assert_eq!(other.debug().registers(), registers);
+        assert_eq!(
+            other.battery_ram(0).unwrap()[0],
+            0x42,
+            "외부 RAM도 되돌린다"
+        );
+        assert_eq!(other.framebuffer(), gb.framebuffer());
+        assert_eq!(other.save_state(0), state);
+    }
+
+    #[test]
+    fn state_of_another_rom_is_rejected_and_nothing_changes() {
+        let mut other_rom = saving_rom();
+        other_rom[0x0134..0x0138].copy_from_slice(b"GOLD");
+        let other = GameBoy::new(other_rom, Model::Dmg).unwrap();
+        let state = other.save_state(0);
+        let mut gb = GameBoy::new(saving_rom(), Model::Dmg).unwrap();
+        gb.run_frame();
+        let before = gb.save_state(0);
+        assert_eq!(
+            gb.load_state(&state, 0),
+            Err(StateError::WrongRom {
+                title: "GOLD".into()
+            })
+        );
+        assert_eq!(gb.save_state(0), before);
+    }
+
+    #[test]
+    fn same_rom_with_different_global_checksum_is_rejected() {
+        let mut patched = saving_rom();
+        patched[0x014E] = 0x12;
+        let state = GameBoy::new(patched, Model::Dmg).unwrap().save_state(0);
+        let mut gb = GameBoy::new(saving_rom(), Model::Dmg).unwrap();
+        assert!(matches!(
+            gb.load_state(&state, 0),
+            Err(StateError::WrongRom { .. })
+        ));
+    }
+
+    #[test]
+    fn state_from_another_model_is_rejected() {
+        let rom = test_rom(0x00, 0x00, 0x80);
+        let cgb = GameBoy::new(rom.clone(), Model::Cgb).unwrap();
+        let mut dmg = GameBoy::new(rom, Model::Dmg).unwrap();
+        let before = dmg.save_state(0);
+        assert!(matches!(
+            dmg.load_state(&cgb.save_state(0), 0),
+            Err(StateError::Corrupt(_))
+        ));
+        assert_eq!(dmg.save_state(0), before);
+    }
+
+    #[test]
+    fn garbage_is_rejected_without_panic() {
+        let mut gb = GameBoy::new(saving_rom(), Model::Dmg).unwrap();
+        assert_eq!(gb.load_state(b"", 0), Err(StateError::NotAState));
+        let mut state = gb.save_state(0);
+        state.truncate(state.len() / 2);
+        assert!(matches!(
+            gb.load_state(&state, 0),
+            Err(StateError::Corrupt(_))
+        ));
+    }
+
+    #[test]
+    fn loading_advances_rtc_by_real_time_since_saving() {
+        let mut rom = test_rom(0x10, 0x00, 0x00);
+        rom[0x0149] = 0x03;
+        let mut gb = GameBoy::new(rom.clone(), Model::Dmg).unwrap();
+        let state = gb.save_state(1_000);
+        gb.load_state(&state, 1_000 + 2 * 3600 + 5).unwrap();
+        // 세이브 파일의 RTC 블록: RAM 뒤 현재 레지스터 초·분·시 (u32 LE)
+        let ram = gb.battery_ram(0).unwrap();
+        let rtc = &ram[0x8000..];
+        assert_eq!((rtc[0], rtc[4], rtc[8]), (5, 0, 2));
+        // 시계가 거꾸로 가면 진행하지 않는다
+        let mut gb = GameBoy::new(rom, Model::Dmg).unwrap();
+        gb.load_state(&state, 10).unwrap();
+        let rtc = &gb.battery_ram(0).unwrap()[0x8000..];
+        assert_eq!((rtc[0], rtc[4], rtc[8]), (0, 0, 0));
+    }
+
+    #[test]
+    fn loading_keeps_host_sample_rate_and_drops_pending_audio() {
+        let mut gb = GameBoy::new(saving_rom(), Model::Dmg).unwrap();
+        gb.set_sample_rate(48_000.0);
+        let state = gb.save_state(0);
+        gb.set_sample_rate(22_050.0);
+        for _ in 0..10 {
+            gb.run_frame();
+        }
+        gb.load_state(&state, 0).unwrap();
+        let mut pending = Vec::new();
+        gb.drain_audio(&mut pending);
+        assert!(pending.is_empty(), "불러오기 전 소리는 버린다");
+        for _ in 0..60 {
+            gb.run_frame();
+        }
+        let mut audio = Vec::new();
+        gb.drain_audio(&mut audio);
+        let per_second = audio.len() as f64 / 2.0 / (60.0 * 70_224.0 / 4_194_304.0);
+        assert!((per_second - 22_050.0).abs() < 100.0, "{per_second}");
     }
 
     #[test]

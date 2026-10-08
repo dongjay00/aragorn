@@ -1,7 +1,7 @@
 //! 채널들이 함께 쓰는 길이 카운터와 볼륨 엔벨로프 (Pan Docs "Audio Registers").
 
 /// 길이 카운터. 켜져 있으면 프레임 시퀀서가 줄이고, 0이 되면 채널을 끈다.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct Length {
     pub enabled: bool,
     pub counter: u16,
@@ -46,7 +46,7 @@ impl Length {
 }
 
 /// 볼륨 엔벨로프 (NRx2).
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct Envelope {
     initial: u8,
     up: bool,
@@ -56,6 +56,13 @@ pub struct Envelope {
 }
 
 impl Envelope {
+    /// 손상된 스테이트 때문에 패닉하지 않게 레지스터 비트 폭을 넘는 값을 감싼다.
+    pub(crate) fn sanitize(&mut self) {
+        self.initial &= 0x0F;
+        self.period &= 7;
+        self.volume &= 0x0F;
+    }
+
     pub fn write(&mut self, value: u8) {
         self.initial = value >> 4;
         self.up = value & 0x08 != 0;

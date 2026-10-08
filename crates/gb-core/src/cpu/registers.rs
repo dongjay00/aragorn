@@ -10,7 +10,7 @@ pub mod flag {
     pub const C: u8 = 0x10;
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub struct Registers {
     pub a: u8,
     pub f: u8,

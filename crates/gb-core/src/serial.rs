@@ -9,10 +9,12 @@ pub const SC: u16 = 0xFF02;
 /// 보관하는 시리얼 출력의 최대 바이트 수. 넘치면 오래된 쪽부터 버린다.
 pub const OUTPUT_LIMIT: usize = 64 * 1024;
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct Serial {
     sb: u8,
     sc: u8,
+    /// 테스트 ROM 결과 출력용이라 스테이트에 넣지 않는다.
+    #[serde(skip)]
     output: Vec<u8>,
 }
 

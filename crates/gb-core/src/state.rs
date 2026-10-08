@@ -6,9 +6,6 @@
 //! 본문은 필드 이름을 함께 저장하므로 다음 버전에서 필드가 늘어도 `#[serde(default)]`로 이전 스테이트를
 //! 읽을 수 있다. ROM 데이터는 넣지 않는다.
 
-// Task 2에서 GameBoy가 쓰기 전까지는 테스트에서만 쓴다.
-#![allow(dead_code)]
-
 use std::fmt;
 
 pub const MAGIC: &[u8; 4] = b"ARGN";

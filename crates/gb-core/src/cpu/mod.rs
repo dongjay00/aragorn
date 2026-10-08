@@ -27,13 +27,13 @@ pub const IF_ADDR: u16 = 0xFF0F;
 pub const IE_ADDR: u16 = 0xFFFF;
 
 /// 정의되지 않은 옵코드를 만나 CPU가 멈춘 위치.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct IllegalOpcode {
     pub pc: u16,
     pub opcode: u8,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Cpu {
     pub regs: Registers,
     ime: bool,

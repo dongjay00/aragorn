@@ -40,7 +40,7 @@ const MODE0_START: u32 = 252;
 /// DMG 기본 팔레트(밝은 색부터). 각 값은 0xRRGGBBAA.
 pub const DEFAULT_DMG_PALETTE: [u32; 4] = [0xE0F8D0FF, 0x88C070FF, 0x346856FF, 0x081820FF];
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 enum Mode {
     HBlank = 0,
     VBlank = 1,
@@ -48,22 +48,26 @@ enum Mode {
     Drawing = 3,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Ppu {
     /// CGB 모드인지. DMG 모드에서는 VRAM 뱅크 1과 컬러 팔레트를 쓰지 않는다.
     cgb: bool,
     /// 뱅크 0(0x0000–0x1FFF)과 CGB 뱅크 1(0x2000–0x3FFF).
+    #[serde(with = "crate::state::bytes::boxed")]
     vram: Box<[u8; 0x4000]>,
     /// CPU가 보는 VRAM 뱅크(VBK 비트 0).
     vram_bank: u8,
     /// CGB 팔레트 RAM: 팔레트 8개 × 색 4개 × 2바이트(15비트 BGR, 리틀 엔디언).
+    #[serde(with = "crate::state::bytes")]
     bg_palettes: [u8; 64],
+    #[serde(with = "crate::state::bytes")]
     obj_palettes: [u8; 64],
     /// 팔레트 인덱스(비트 0–5)와 자동 증가(비트 7).
     bcps: u8,
     ocps: u8,
     /// 보이는 줄의 HBlank(모드 0)에 들어갔는지. HBlank DMA가 쓴다. 읽으면 초기화된다.
     hblank_started: bool,
+    #[serde(with = "crate::state::bytes::boxed")]
     oam: Box<[u8; 0xA0]>,
     lcdc: u8,
     /// STAT의 쓰기 가능한 비트(3–6). 모드와 LYC 일치 비트는 읽을 때 만든다.
@@ -90,6 +94,7 @@ pub struct Ppu {
     stat_line: bool,
     frame_ready: bool,
     palette: [u32; 4],
+    #[serde(with = "crate::state::words")]
     framebuffer: Box<[u32; SCREEN_WIDTH * SCREEN_HEIGHT]>,
 }
 
@@ -100,6 +105,21 @@ impl Default for Ppu {
 }
 
 impl Ppu {
+    /// 손상된 스테이트 때문에 패닉하지 않게 인덱스로 쓰는 값을 하드웨어 범위로 감싼다.
+    pub(crate) fn sanitize(&mut self) {
+        self.vram_bank &= 0x01;
+        // LCD가 켜져 있으면 줄 안의 위치(2 dot 단위), 꺼져 있으면 프레임 안의 위치다.
+        self.dot = if self.lcdc & 0x80 != 0 {
+            (self.dot % DOTS_PER_LINE) & !1
+        } else {
+            self.dot % DOTS_PER_FRAME
+        };
+        self.ly %= LINES_PER_FRAME;
+        if self.ly >= SCREEN_HEIGHT as u8 {
+            self.mode = Mode::VBlank;
+        }
+    }
+
     /// 부트 ROM 직후 상태. CGB 팔레트 RAM은 흰색으로 채운다.
     pub fn new(cgb: bool) -> Self {
         Self {

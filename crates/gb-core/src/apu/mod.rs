@@ -32,7 +32,7 @@ const READ_MASK: [u8; 0x20] = [
     0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, // 빈 칸
 ];
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Apu {
     cgb: bool,
     power: bool,
@@ -311,6 +311,17 @@ impl Apu {
 
     pub fn set_sample_rate(&mut self, rate: f64) {
         self.mixer.set_sample_rate(rate);
+    }
+
+    /// 스테이트에서 읽은 APU에 호스트 설정을 옮기고, 레지스터 비트 폭을 넘는 값을 감싼다.
+    pub(crate) fn adopt_host(&mut self, host: &Apu) {
+        self.mixer.adopt_host(&host.mixer);
+        self.fs_step &= 7;
+        self.sweep.sanitize();
+        self.ch1.sanitize();
+        self.ch2.sanitize();
+        self.ch3.sanitize();
+        self.ch4.sanitize();
     }
 
     /// 쌓인 인터리브 스테레오 샘플을 `out` 뒤에 붙인다.
