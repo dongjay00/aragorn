@@ -48,7 +48,7 @@ impl Session {
         let title = gb.header().title.trim().to_string();
         let mut errors = Vec::new();
         let mut store_blocked = false;
-        if let Some(ram_len) = gb.battery_ram().map(|ram| ram.len()) {
+        if let Some(ram_len) = gb.battery_ram(0).map(|ram| ram.len()) {
             match store.load_battery() {
                 Ok(Some(data)) => {
                     if data.len() < ram_len {
@@ -120,7 +120,7 @@ impl Session {
     }
 
     pub fn battery_ram(&self) -> Option<Vec<u8>> {
-        self.gb.battery_ram()
+        self.gb.battery_ram(0)
     }
 
     /// 저장하지 않은 세이브가 있으면 지금 저장한다. 앱 종료, ROM 교체, 업데이트 적용 전에 부른다.
@@ -153,7 +153,7 @@ impl Session {
     }
 
     fn save_battery(&mut self) {
-        let Some(ram) = self.gb.battery_ram() else {
+        let Some(ram) = self.gb.battery_ram(0) else {
             self.unsaved = false;
             return;
         };

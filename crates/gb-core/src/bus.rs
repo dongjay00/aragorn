@@ -351,6 +351,7 @@ impl CpuBus for Bus {
             self.apu.frame_sequencer();
         }
         self.apu.tick(dots);
+        self.cart.tick(dots);
         self.if_ |= self.ppu.tick(dots);
         if self.ppu.take_hblank_started() && self.hdma.hblank {
             self.hdma_block();
@@ -734,5 +735,22 @@ mod tests {
             b.tick();
         }
         assert_eq!(b.read(0x8100), 0x00, "멈춘 뒤에는 옮기지 않는다");
+    }
+
+    #[test]
+    fn cartridge_rtc_runs_on_emulated_time() {
+        // MBC3+TIMER+RAM+BATTERY: RAM 켜고 RTC 초 선택
+        let mut b = Bus::new(
+            Cartridge::new(test_rom(0x10, 0x01, 0x00)).unwrap(),
+            Model::Dmg,
+        );
+        b.write(0x0000, 0x0A);
+        b.write(0x4000, 0x08);
+        for _ in 0..1_048_576 {
+            b.tick();
+        }
+        b.write(0x6000, 0x00);
+        b.write(0x6000, 0x01);
+        assert_eq!(b.read(0xA000), 1, "1초(1048576 M-사이클) 뒤 1초");
     }
 }

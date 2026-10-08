@@ -60,14 +60,20 @@ impl GameBoy {
         self.bus.set_button(button, pressed);
     }
 
-    /// 세이브 파일로 남길 외부 RAM. 배터리가 없는 카트리지는 `None`.
-    pub fn battery_ram(&self) -> Option<Vec<u8>> {
-        self.bus.cartridge().battery_ram().map(<[u8]>::to_vec)
+    /// 세이브 파일 내용: 외부 RAM과, MBC3 RTC가 있으면 48바이트 RTC 블록(BGB/VBA-M 형식).
+    /// `now_unix`는 저장 시각으로 기록된다. 배터리가 없는 카트리지는 `None`.
+    pub fn battery_ram(&self, now_unix: u64) -> Option<Vec<u8>> {
+        self.bus.cartridge().battery_ram(now_unix)
     }
 
-    /// 세이브 파일 내용을 싣는다. `now_unix`는 MBC3 RTC의 오프라인 경과 보정용이다(M6).
-    pub fn load_battery_ram(&mut self, data: &[u8], _now_unix: u64) {
-        self.bus.cartridge_mut().load_battery_ram(data);
+    /// 외부 RAM 크기(바이트). 세이브 파일에서 RTC 블록을 뺀 길이다.
+    pub fn cartridge_ram_len(&self) -> usize {
+        self.bus.cartridge().ram_len()
+    }
+
+    /// 세이브 파일 내용을 싣는다. RTC가 있으면 저장 시각부터 `now_unix`까지 지난 시간만큼 시계를 진행한다.
+    pub fn load_battery_ram(&mut self, data: &[u8], now_unix: u64) {
+        self.bus.cartridge_mut().load_battery_ram(data, now_unix);
     }
 
     /// 마지막 호출 뒤 외부 RAM에 쓰기가 있었으면 `true`. 읽으면 초기화된다.
@@ -227,9 +233,9 @@ mod tests {
     #[test]
     fn battery_ram_is_exposed_only_for_battery_carts() {
         let gb = GameBoy::new(saving_rom(), Model::Dmg).unwrap();
-        assert_eq!(gb.battery_ram().map(|r| r.len()), Some(0x2000));
+        assert_eq!(gb.battery_ram(0).map(|r| r.len()), Some(0x2000));
         let gb = gb_with_program(&[0x00]);
-        assert_eq!(gb.battery_ram(), None);
+        assert_eq!(gb.battery_ram(0), None);
     }
 
     #[test]
@@ -240,14 +246,14 @@ mod tests {
         assert!(gb.battery_dirty());
         assert!(!gb.battery_dirty(), "읽으면 초기화");
         assert!(!gb.cartridge_ram_enabled());
-        assert_eq!(gb.battery_ram().unwrap()[0], 0x42);
+        assert_eq!(gb.battery_ram(0).unwrap()[0], 0x42);
     }
 
     #[test]
     fn loaded_battery_ram_is_visible_to_the_game() {
         let mut gb = GameBoy::new(saving_rom(), Model::Dmg).unwrap();
         gb.load_battery_ram(&[0x11, 0x22], 0);
-        let ram = gb.battery_ram().unwrap();
+        let ram = gb.battery_ram(0).unwrap();
         assert_eq!((ram[0], ram[1], ram[2]), (0x11, 0x22, 0x00));
         assert!(!gb.battery_dirty(), "불러오기는 게임의 쓰기가 아니다");
     }
