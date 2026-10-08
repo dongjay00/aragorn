@@ -1,5 +1,5 @@
 /// 에뮬레이션할 기기.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub enum Model {
     /// 카트리지 헤더의 CGB 플래그로 고른다.
     #[default]

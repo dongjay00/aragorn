@@ -12,7 +12,7 @@ pub const TMA: u16 = 0xFF06;
 pub const TAC: u16 = 0xFF07;
 
 /// TIMA 오버플로 후 TMA를 다시 싣는 과정.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 enum Reload {
     None,
     /// 오버플로가 났고 TIMA는 0이다. 다음 M-사이클에 TMA를 싣는다. 이때 TIMA를 쓰면 취소된다.
@@ -21,7 +21,7 @@ enum Reload {
     Reloading,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Timer {
     counter: u16,
     tima: u8,

@@ -45,7 +45,7 @@ impl Button {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Joypad {
     /// P1의 선택 비트(4–5). 부트 직후에는 둘 다 1(아무 줄도 선택하지 않음).
     select: u8,

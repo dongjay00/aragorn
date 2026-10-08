@@ -7,8 +7,10 @@ pub const DEFAULT_SAMPLE_RATE: f64 = 48_000.0;
 /// (헤드리스 테스트) 메모리가 늘지 않게 한다.
 const MAX_PENDING: usize = 48_000 * 2;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Mixer {
+    /// 호스트 설정이라 스테이트에 넣지 않는다. 불러올 때 지금 값을 유지한다.
+    #[serde(skip)]
     sample_rate: f64,
     /// 다음 출력 샘플까지 쌓인 위상(× M-사이클 1초).
     phase: f64,
@@ -16,7 +18,9 @@ pub struct Mixer {
     count: u32,
     /// 하이패스 필터 축전기 전압 (gbdev wiki "Game Boy Sound Hardware" Obscure Behavior).
     capacitor: (f32, f32),
+    #[serde(skip)]
     charge: f32,
+    #[serde(skip)]
     out: Vec<f32>,
 }
 
@@ -37,6 +41,22 @@ impl Default for Mixer {
 }
 
 impl Mixer {
+    /// 스테이트에서 읽은 믹서에 호스트 설정(샘플레이트)을 옮긴다. 손상된 누적값은 비운다.
+    pub(crate) fn adopt_host(&mut self, host: &Mixer) {
+        self.set_sample_rate(host.sample_rate);
+        let finite = |v: (f32, f32)| v.0.is_finite() && v.1.is_finite();
+        if !(0.0..T_CYCLES_PER_SEC).contains(&self.phase)
+            || !finite(self.sum)
+            || !finite(self.capacitor)
+            || self.count > T_CYCLES_PER_SEC as u32
+        {
+            self.phase = 0.0;
+            self.sum = (0.0, 0.0);
+            self.count = 0;
+            self.capacitor = (0.0, 0.0);
+        }
+    }
+
     /// 출력 샘플레이트(Hz). 프론트엔드가 오디오 버퍼 상태에 따라 조금씩 바꾼다.
     pub fn set_sample_rate(&mut self, rate: f64) {
         let rate = rate.clamp(8_000.0, 192_000.0);

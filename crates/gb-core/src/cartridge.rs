@@ -3,6 +3,7 @@
 //! ROM-only, MBC1, MBC3(+RTC), MBC5의 ROM/RAM 뱅크 전환과 배터리 세이브를 지원한다.
 
 use crate::rtc::{self, Rtc};
+use crate::state::RomId;
 use std::fmt;
 
 const HEADER_END: usize = 0x0150;
@@ -28,7 +29,7 @@ impl fmt::Display for CartError {
 
 impl std::error::Error for CartError {}
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Header {
     pub title: String,
     pub cgb_flag: u8,
@@ -60,7 +61,7 @@ impl Header {
 }
 
 /// 메모리 뱅크 컨트롤러 (Pan Docs "MBCs"). 직렬화를 위해 trait 객체 대신 enum으로 둔다.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 enum Mbc {
     /// ROM-only (+RAM). 뱅크 전환 없음.
     None,
@@ -72,15 +73,21 @@ enum Mbc {
     Mbc5 { rom_bank: u16, ram_bank: u8 },
 }
 
+#[derive(serde::Serialize, serde::Deserialize)]
 pub struct Cartridge {
+    /// ROM과 헤더는 스테이트에 넣지 않는다. 불러올 때 지금 카트리지의 것을 쓴다.
+    #[serde(skip)]
     header: Header,
+    #[serde(skip)]
     rom: Vec<u8>,
     ram: Vec<u8>,
     ram_enabled: bool,
     mbc: Mbc,
     /// 배터리가 있어 외부 RAM을 세이브 파일로 남겨야 하는 카트리지인지.
     battery: bool,
-    /// 마지막으로 확인한 뒤 외부 RAM(또는 RTC)에 쓰기가 있었는지.
+    /// 마지막으로 확인한 뒤 외부 RAM(또는 RTC)에 쓰기가 있었는지. 스테이트에는 넣지 않는다:
+    /// 불러온 직후 스테이트의 옛 외부 RAM이 세이브 파일을 덮어쓰지 않게 한다.
+    #[serde(skip)]
     ram_dirty: bool,
     /// MBC3+TIMER 카트리지(0x0F, 0x10)의 실시간 시계.
     rtc: Option<Rtc>,
@@ -137,6 +144,39 @@ impl Cartridge {
 
     pub fn header(&self) -> &Header {
         &self.header
+    }
+
+    /// 세이브 스테이트가 어느 ROM의 것인지 가리는 값: 헤더 전역 체크섬(0x014E–0x014F)과 제목.
+    pub fn rom_id(&self) -> RomId {
+        RomId {
+            global_checksum: u16::from_be_bytes([self.rom[0x014E], self.rom[0x014F]]),
+            title: self.header.title.clone(),
+        }
+    }
+
+    /// 스테이트에서 읽은 카트리지에 지금 카트리지의 ROM·헤더를 붙인다. 구조(MBC 종류, 외부 RAM 크기,
+    /// RTC 유무)가 다르면 거부한다. `host`는 바꾸지 않는다.
+    pub(crate) fn adopt_rom(&mut self, host: &Cartridge) -> Result<(), String> {
+        if std::mem::discriminant(&self.mbc) != std::mem::discriminant(&host.mbc) {
+            return Err("MBC 종류가 다릅니다".into());
+        }
+        if self.ram.len() != host.ram.len() {
+            return Err("외부 RAM 크기가 다릅니다".into());
+        }
+        if self.rtc.is_some() != host.rtc.is_some() {
+            return Err("RTC 유무가 다릅니다".into());
+        }
+        self.battery = host.battery;
+        self.header = host.header.clone();
+        self.rom = host.rom.clone();
+        Ok(())
+    }
+
+    /// RTC가 있으면 `seconds`초 진행한다 (스테이트를 저장한 뒤 지난 실제 시간).
+    pub(crate) fn advance_rtc(&mut self, seconds: u64) {
+        if let Some(rtc) = &mut self.rtc {
+            rtc.advance_offline(seconds);
+        }
     }
 
     fn rom_byte(&self, bank: usize, addr: u16) -> u8 {

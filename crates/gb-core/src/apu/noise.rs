@@ -2,7 +2,7 @@
 
 use super::channel::{Envelope, Length};
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct Noise {
     pub enabled: bool,
     pub length: Length,
@@ -16,6 +16,14 @@ pub struct Noise {
 }
 
 impl Noise {
+    /// 손상된 스테이트 때문에 패닉하지 않게 레지스터 비트 폭을 넘는 값을 감싼다.
+    pub(crate) fn sanitize(&mut self) {
+        self.shift &= 0x0F;
+        self.divisor &= 7;
+        self.lfsr &= 0x7FFF;
+        self.env.sanitize();
+    }
+
     pub fn reg(&self) -> u8 {
         self.shift << 4 | u8::from(self.narrow) << 3 | self.divisor
     }

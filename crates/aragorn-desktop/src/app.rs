@@ -5,6 +5,7 @@ use crate::{
         input::{self, InputFrame, Keymap},
         screen::ScreenView,
         settings::SettingsView,
+        state_slots::{self, SlotCommand, SlotsView},
         update_view::{self, UpdateUiAction},
     },
     update_worker::UpdateWorker,
@@ -12,7 +13,7 @@ use crate::{
 use aragorn_app::{
     config::{Config, ConfigStore, UpdateConfig},
     pacing::{FastForward, RunMode, SpeedControl, UNLIMITED_BUDGET},
-    session::Session,
+    session::{Clock, Session},
     update::{UpdateCommand, UpdateEvent, UpdateFlow, UpdateSource, Updater},
 };
 use eframe::egui;
@@ -106,6 +107,7 @@ pub struct AragornApp {
     /// 직전 화면 갱신의 실행 모드 (상태 표시줄용)
     mode: RunMode,
     settings: SettingsView,
+    slots: SlotsView,
 }
 
 impl AragornApp {
@@ -147,6 +149,7 @@ impl AragornApp {
             speed: SpeedControl::default(),
             mode: RunMode::Normal,
             settings: SettingsView::default(),
+            slots: SlotsView::default(),
         };
         if app.worker.is_some() {
             app.dispatch(UpdateEvent::CheckRequested);
@@ -172,6 +175,7 @@ impl AragornApp {
                 )));
                 self.screen.update(ctx, session.framebuffer());
                 self.notice = Some(format!("{} 실행 중", session.title()));
+                self.slots.invalidate();
                 self.session = Some(session);
                 self.last_tick = Instant::now();
                 self.collect_session_errors();
@@ -217,6 +221,37 @@ impl AragornApp {
             |key| ctx.input(|i| input::pressed_once(&i.events, key)),
             &pad.input,
         ))
+    }
+
+    /// 스테이트 슬롯에 저장하거나 불러오고 결과를 상태 표시줄에 알린다. 종료 중이거나 강제 업데이트
+    /// 중에는 하지 않는다.
+    fn run_slot_command(&mut self, ctx: &egui::Context, command: SlotCommand) {
+        if self.exit_handled || self.flow.blocks_emulation() {
+            return;
+        }
+        let Some(session) = &mut self.session else {
+            return;
+        };
+        let result = match command {
+            SlotCommand::Save(slot) => {
+                self.slots.invalidate();
+                session
+                    .save_state(slot)
+                    .map(|()| format!("슬롯 {}에 저장했습니다", slot + 1))
+            }
+            SlotCommand::Load(slot) => session.load_state(slot).map(|()| {
+                self.screen.update(ctx, session.framebuffer());
+                format!("슬롯 {}을(를) 불러왔습니다", slot + 1)
+            }),
+        };
+        match result {
+            Ok(message) => self.notice = Some(message),
+            Err(message) => {
+                log::warn!("{message}");
+                self.notice = Some(message);
+            }
+        }
+        self.collect_session_errors();
     }
 
     fn input_config_changed(&mut self) {
@@ -351,6 +386,11 @@ impl eframe::App for AragornApp {
             release_widget_focus(ctx);
         }
         let input = self.gather_input(ctx);
+        if input.is_some()
+            && let Some(command) = ctx.input(|i| state_slots::hotkey(&i.events))
+        {
+            self.run_slot_command(ctx, command);
+        }
         self.run_emulation(ctx, input);
         // 6시간 재확인 타이머가 유휴 상태에서도 돌도록 주기적으로 깨운다.
         ctx.request_repaint_after(Duration::from_secs(60));
@@ -360,6 +400,7 @@ impl eframe::App for AragornApp {
         let mut events = Vec::new();
 
         let mut open_requested = false;
+        let mut slot_command = None;
         egui::Panel::top("toolbar").show(ui, |ui| {
             ui.horizontal(|ui| {
                 if ui.button("ROM 열기").clicked() {
@@ -367,6 +408,12 @@ impl eframe::App for AragornApp {
                 }
                 if ui.button("설정").clicked() {
                     self.settings.open = !self.settings.open;
+                }
+                if let Some(session) = &self.session {
+                    let now = SystemClock.now_unix();
+                    ui.menu_button("스테이트", |ui| {
+                        slot_command = self.slots.show(ui, session, now);
+                    });
                 }
                 ui.separator();
                 let mut auto_download = self.flow.prefs().auto_download;
@@ -422,6 +469,10 @@ impl eframe::App for AragornApp {
             }
         });
 
+        if let Some(command) = slot_command {
+            let ctx = ui.ctx().clone();
+            self.run_slot_command(&ctx, command);
+        }
         if self.settings.show(ui.ctx(), &mut self.config.input) {
             self.input_config_changed();
         }

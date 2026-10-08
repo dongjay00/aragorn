@@ -11,7 +11,7 @@ const TRIGGER_DELAY: u32 = 6;
 /// 남은 타이머가 이 값 이하일 때(다음 2 MHz 클록에 읽을 때) 다시 트리거하면 웨이브 RAM이 망가진다.
 const CORRUPTION_WINDOW: u32 = 2;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Wave {
     /// CGB는 채널이 켜져 있어도 웨이브 RAM(현재 바이트)에 언제나 접근할 수 있고, 다시 트리거해도 망가지지 않는다.
     pub cgb: bool,
@@ -50,6 +50,13 @@ impl Default for Wave {
 }
 
 impl Wave {
+    /// 손상된 스테이트 때문에 패닉하지 않게 레지스터 비트 폭을 넘는 값을 감싼다.
+    pub(crate) fn sanitize(&mut self) {
+        self.freq &= 0x7FF;
+        self.level &= 3;
+        self.position &= 31;
+    }
+
     /// 한 샘플의 길이(T-사이클).
     fn period(&self) -> u32 {
         (2048 - u32::from(self.freq)) * 2
