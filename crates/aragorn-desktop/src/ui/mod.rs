@@ -1,3 +1,4 @@
+pub mod debugger;
 pub mod fonts;
 pub mod input;
 pub mod screen;

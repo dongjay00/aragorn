@@ -2,7 +2,8 @@ use crate::{
     adapters::{CpalAudio, FsSaveStore, Gamepads, SystemClock, UnavailableUpdater},
     build_info,
     ui::{
-        input::{self, InputFrame, Keymap},
+        debugger::{DebugCommand, DebuggerView},
+        input::{self, InputFrame, Keymap, TypingGuard},
         screen::ScreenView,
         settings::SettingsView,
         state_slots::{self, SlotCommand, SlotsView},
@@ -51,7 +52,11 @@ pub fn load_session(path: &Path) -> Result<Session, String> {
 
 /// 위젯의 키보드 포커스를 없앤다. 게임 키(Tab=배속, 방향키, Enter=Start)가 egui 포커스 이동과
 /// 버튼 누르기로 새지 않게 설정 창이 닫혀 있을 때 매 화면 갱신마다 부른다.
+/// 글자 입력칸(디버거의 주소 입력)의 포커스는 남긴다. 그동안 키보드는 게임에 가지 않는다.
 pub fn release_widget_focus(ctx: &egui::Context) {
+    if ctx.text_edit_focused() {
+        return;
+    }
     ctx.memory_mut(|m| {
         if let Some(id) = m.focused() {
             m.surrender_focus(id);
@@ -108,6 +113,8 @@ pub struct AragornApp {
     mode: RunMode,
     settings: SettingsView,
     slots: SlotsView,
+    debugger: DebuggerView,
+    typing_guard: TypingGuard,
 }
 
 impl AragornApp {
@@ -150,6 +157,8 @@ impl AragornApp {
             mode: RunMode::Normal,
             settings: SettingsView::default(),
             slots: SlotsView::default(),
+            debugger: DebuggerView::default(),
+            typing_guard: TypingGuard::default(),
         };
         if app.worker.is_some() {
             app.dispatch(UpdateEvent::CheckRequested);
@@ -176,6 +185,8 @@ impl AragornApp {
                 self.screen.update(ctx, session.framebuffer());
                 self.notice = Some(format!("{} 실행 중", session.title()));
                 self.slots.invalidate();
+                let mut session = session;
+                session.set_breakpoints(self.debugger.breakpoints());
                 self.session = Some(session);
                 self.last_tick = Instant::now();
                 self.collect_session_errors();
@@ -215,10 +226,16 @@ impl AragornApp {
             }
             return None;
         }
+        // 글자 입력칸에 입력하는 동안, 그리고 그때 눌린 키를 뗄 때까지 키보드는 게임에 넘기지 않는다
+        // (게임패드는 그대로).
+        let typing = ctx.text_edit_focused();
+        self.typing_guard
+            .update(typing, &ctx.input(|i| i.keys_down.clone()));
+        let guard = &self.typing_guard;
         Some(input::gather(
             &self.keymap,
-            |key| ctx.input(|i| i.key_down(key)),
-            |key| ctx.input(|i| input::pressed_once(&i.events, key)),
+            |key| guard.allows(typing, key) && ctx.input(|i| i.key_down(key)),
+            |key| guard.allows(typing, key) && ctx.input(|i| input::pressed_once(&i.events, key)),
             &pad.input,
         ))
     }
@@ -250,6 +267,31 @@ impl AragornApp {
                 log::warn!("{message}");
                 self.notice = Some(message);
             }
+        }
+        self.collect_session_errors();
+    }
+
+    /// 디버거 창의 요청을 처리한다. 단계 실행은 일시정지한 상태에서 한다. 종료 중이거나 강제 업데이트
+    /// 중에는 하지 않는다.
+    fn run_debug_command(&mut self, ctx: &egui::Context, command: DebugCommand) {
+        if self.exit_handled || self.flow.blocks_emulation() {
+            return;
+        }
+        let Some(session) = &mut self.session else {
+            return;
+        };
+        match command {
+            DebugCommand::TogglePause => self.speed.toggle_pause(),
+            DebugCommand::StepInstruction | DebugCommand::StepFrame => {
+                self.speed.pause();
+                if command == DebugCommand::StepInstruction {
+                    session.step_instruction();
+                } else {
+                    session.step_frame();
+                }
+                self.screen.update(ctx, session.framebuffer());
+            }
+            DebugCommand::SetBreakpoints(pcs) => session.set_breakpoints(&pcs),
         }
         self.collect_session_errors();
     }
@@ -286,6 +328,12 @@ impl AragornApp {
         let mut within_budget = || started.elapsed() < UNLIMITED_BUDGET;
         if session.run(elapsed, self.mode, &mut within_budget) > 0 {
             self.screen.update(ctx, session.framebuffer());
+        }
+        if let Some(pc) = session.take_breakpoint_stop() {
+            self.speed.pause();
+            self.mode = RunMode::Paused;
+            self.debugger.open = true;
+            self.notice = Some(format!("브레이크포인트 ${pc:04X}에서 멈췄습니다"));
         }
         if let Some(sink) = self.audio.sink() {
             session.pump_audio(sink);
@@ -387,6 +435,7 @@ impl eframe::App for AragornApp {
         }
         let input = self.gather_input(ctx);
         if input.is_some()
+            && !ctx.text_edit_focused()
             && let Some(command) = ctx.input(|i| state_slots::hotkey(&i.events))
         {
             self.run_slot_command(ctx, command);
@@ -405,6 +454,9 @@ impl eframe::App for AragornApp {
             ui.horizontal(|ui| {
                 if ui.button("ROM 열기").clicked() {
                     open_requested = true;
+                }
+                if ui.button("디버거").clicked() {
+                    self.debugger.open = !self.debugger.open;
                 }
                 if ui.button("설정").clicked() {
                     self.settings.open = !self.settings.open;
@@ -469,6 +521,16 @@ impl eframe::App for AragornApp {
             }
         });
 
+        let debug_commands = match &self.session {
+            Some(session) => self
+                .debugger
+                .show(ui.ctx(), session, self.speed.is_paused()),
+            None => Vec::new(),
+        };
+        for command in debug_commands {
+            let ctx = ui.ctx().clone();
+            self.run_debug_command(&ctx, command);
+        }
         if let Some(command) = slot_command {
             let ctx = ui.ctx().clone();
             self.run_slot_command(&ctx, command);
@@ -517,6 +579,25 @@ mod tests {
         });
         output.textures_delta.clear();
         clicked
+    }
+
+    #[test]
+    fn text_field_keeps_focus_while_typing() {
+        let ctx = egui::Context::default();
+        let mut text = String::new();
+        let id = egui::Id::new("address");
+        // 첫 화면 갱신에서 입력칸을 누른 것처럼 포커스를 주고, 이후 갱신마다 앱처럼 포커스를 정리한다.
+        for frame in 0..3 {
+            let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+                release_widget_focus(ui.ctx());
+                let response = ui.add(egui::TextEdit::singleline(&mut text).id(id));
+                if frame == 0 {
+                    response.request_focus();
+                }
+            });
+            output.textures_delta.clear();
+        }
+        assert!(ctx.memory(|m| m.has_focus(id)), "입력칸 포커스는 남는다");
     }
 
     #[test]

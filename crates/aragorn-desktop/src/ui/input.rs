@@ -3,6 +3,7 @@
 use aragorn_app::input::{Action, Bindings};
 use eframe::egui::{Event, Key};
 use gb_core::Button;
+use std::collections::HashSet;
 
 /// 설정의 키보드 매핑을 egui 키로 바꾼 것.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -32,6 +33,29 @@ impl Keymap {
             .iter()
             .find(|(a, _)| *a == action)
             .and_then(|(_, k)| *k)
+    }
+}
+
+/// 글자 입력칸에 입력하는 동안 눌린 키를 뗄 때까지 게임에 넘기지 않는다. 입력칸에서 Enter를 누르면
+/// 포커스가 풀린 뒤에도 키가 눌려 있어서 게임의 Start로 새는 것을 막는다.
+#[derive(Debug, Default)]
+pub struct TypingGuard {
+    blocked: HashSet<Key>,
+}
+
+impl TypingGuard {
+    /// 화면 갱신마다 부른다. `keys_down`은 지금 눌린 키 전부다.
+    pub fn update(&mut self, typing: bool, keys_down: &HashSet<Key>) {
+        if typing {
+            self.blocked.extend(keys_down);
+        } else {
+            self.blocked.retain(|k| keys_down.contains(k));
+        }
+    }
+
+    /// 이 키를 게임에 넘겨도 되는지.
+    pub fn allows(&self, typing: bool, key: Key) -> bool {
+        !typing && !self.blocked.contains(&key)
     }
 }
 
@@ -166,6 +190,30 @@ mod tests {
             modifiers: egui::Modifiers::NONE,
         };
         assert!(!pressed_once(&[released], Key::Escape));
+    }
+
+    #[test]
+    fn keys_held_while_typing_stay_blocked_until_released() {
+        let mut guard = TypingGuard::default();
+        let down = |keys: &[Key]| {
+            keys.iter()
+                .copied()
+                .collect::<std::collections::HashSet<_>>()
+        };
+        // 입력칸에서 Enter를 누른다
+        guard.update(true, &down(&[Key::Enter]));
+        assert!(!guard.allows(true, Key::X), "입력 중에는 모두 막는다");
+        // 입력칸이 포커스를 잃었지만 Enter는 아직 눌려 있다
+        guard.update(false, &down(&[Key::Enter, Key::X]));
+        assert!(!guard.allows(false, Key::Enter));
+        assert!(
+            guard.allows(false, Key::X),
+            "입력이 끝난 뒤 새로 누른 키는 통과"
+        );
+        // Enter를 뗐다가 다시 누르면 통과
+        guard.update(false, &down(&[]));
+        guard.update(false, &down(&[Key::Enter]));
+        assert!(guard.allows(false, Key::Enter));
     }
 
     #[test]

@@ -1,6 +1,7 @@
 //! SM83 CPU. 모든 메모리 접근과 내부 지연마다 `CpuBus::tick`을 호출한다 (M-사이클 tick 모델).
 
 pub mod alu;
+pub mod disasm;
 pub mod registers;
 
 #[cfg(test)]
@@ -43,6 +44,10 @@ pub struct Cpu {
     /// IME=0이고 인터럽트가 대기 중일 때 HALT하면 다음 바이트를 두 번 읽는다 (HALT 버그).
     halt_bug: bool,
     lock: Option<IllegalOpcode>,
+    /// IME=0으로 HALT에서 깨어난 사이클이 다음 명령의 fetch 사이클이었다. 그 명령은 다음 `step`에서
+    /// 실행한다(사이클은 더 쓰지 않는다). 디버거가 그 명령 앞에서 멈출 수 있게 나눈다.
+    #[serde(default)]
+    wake_fetched: bool,
 }
 
 impl Cpu {
@@ -54,6 +59,7 @@ impl Cpu {
             halted: false,
             halt_bug: false,
             lock: None,
+            wake_fetched: false,
         }
     }
 
@@ -78,19 +84,26 @@ impl Cpu {
             bus.tick();
             return;
         }
+        if self.wake_fetched {
+            // 깨어난 사이클이 이 명령의 fetch 사이클이었다.
+            self.wake_fetched = false;
+            let pc = self.regs.pc;
+            let opcode = bus.read(pc);
+            self.regs.pc = pc.wrapping_add(1);
+            self.execute(bus, opcode);
+            return;
+        }
         if self.halted {
             // HALT 중에도 매 M-사이클이 fetch 사이클처럼 동작한다 (PC는 증가하지 않는다).
             bus.tick();
             if pending_interrupts(bus) != 0 {
                 self.halted = false;
-                let pc = self.regs.pc;
                 if self.ime {
+                    let pc = self.regs.pc;
                     self.dispatch(bus, pc);
                 } else {
-                    // 깨어난 사이클이 다음 명령의 fetch 사이클이다.
-                    let opcode = bus.read(pc);
-                    self.regs.pc = pc.wrapping_add(1);
-                    self.execute(bus, opcode);
+                    // 깨어난 사이클이 다음 명령의 fetch 사이클이다. 명령은 다음 step에서 실행한다.
+                    self.wake_fetched = true;
                 }
             }
             return;

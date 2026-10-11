@@ -2,7 +2,7 @@
 
 use crate::audio::{self, AudioSink};
 use crate::pacing::{FramePacer, RunMode, UNLIMITED_MAX_FRAMES};
-use gb_core::{Button, CartError, GameBoy, Model};
+use gb_core::{Button, CartError, DebugView, GameBoy, Model};
 use std::{io, time::Duration};
 
 /// 게임이 외부 RAM을 켠 채로 두어도, 마지막 쓰기 뒤 이만큼(약 1초) 쓰기가 없으면 저장한다.
@@ -78,6 +78,8 @@ pub struct Session {
     save_failed: bool,
     /// 기존 세이브를 읽지 못했으면 덮어쓰지 않는다. 새 게임으로 덮으면 원래 진행이 사라진다.
     store_blocked: bool,
+    /// 브레이크포인트에 새로 걸려 멈춘 PC. `take_breakpoint_stop`이 한 번만 꺼내 간다.
+    breakpoint_stop: Option<u16>,
     /// 배속이나 일시정지로 소리를 내지 않는 중인지. 다음 `pump_audio`가 만든 소리를 버린다.
     muted: bool,
     /// 상태 표시줄에 보일 오류 문구.
@@ -129,6 +131,7 @@ impl Session {
             idle_frames: 0,
             save_failed: false,
             store_blocked,
+            breakpoint_stop: None,
             muted: false,
             errors,
             audio: Vec::new(),
@@ -174,22 +177,65 @@ impl Session {
                     self.pacer.reset();
                     let mut frames = 0;
                     while frames == 0 || (frames < UNLIMITED_MAX_FRAMES && keep_going()) {
-                        self.run_one_frame();
                         frames += 1;
+                        if !self.run_one_frame() {
+                            break;
+                        }
                     }
                     return frames;
                 }
             },
         };
-        for _ in 0..frames {
-            self.run_one_frame();
+        for done in 1..=frames {
+            if !self.run_one_frame() {
+                return done;
+            }
         }
         frames
     }
 
-    fn run_one_frame(&mut self) {
+    /// 한 프레임을 돌린다. 브레이크포인트에 걸려 멈췄으면 `false`.
+    fn run_one_frame(&mut self) -> bool {
         self.gb.run_frame();
         self.track_battery();
+        let hit = self.gb.debug().breakpoint_hit();
+        if hit.is_some() {
+            self.breakpoint_stop = hit;
+        }
+        hit.is_none()
+    }
+
+    /// 브레이크포인트에 새로 걸려 멈췄으면 그 PC를 한 번만 돌려준다. 프레임을 돌리지 않은 갱신에서는
+    /// 지난 정지를 다시 알리지 않는다.
+    pub fn take_breakpoint_stop(&mut self) -> Option<u16> {
+        self.breakpoint_stop.take()
+    }
+
+    /// 디버거: 명령 하나를 실행한다(브레이크포인트는 보지 않는다). 소리는 내지 않는다.
+    pub fn step_instruction(&mut self) {
+        self.muted = true;
+        self.gb.step_instruction();
+    }
+
+    /// 디버거: 프레임 하나를 실행한다. 브레이크포인트에 걸리면 그 자리에서 멈춘다. 소리는 내지 않는다.
+    pub fn step_frame(&mut self) {
+        self.muted = true;
+        self.run_one_frame();
+    }
+
+    /// PC 브레이크포인트를 바꾼다.
+    pub fn set_breakpoints(&mut self, pcs: &[u16]) {
+        self.gb.set_breakpoints(pcs);
+    }
+
+    /// 마지막 실행이 브레이크포인트에 걸려 멈췄으면 그 PC.
+    pub fn breakpoint_hit(&self) -> Option<u16> {
+        self.gb.debug().breakpoint_hit()
+    }
+
+    /// 디버거가 읽는 코어 상태.
+    pub fn debug(&self) -> DebugView<'_> {
+        self.gb.debug()
     }
 
     pub fn set_button(&mut self, button: Button, pressed: bool) {
@@ -850,6 +896,65 @@ mod tests {
         let ram = session.battery_ram().unwrap();
         let rtc = &ram[0x2000..];
         assert_eq!((rtc[0], rtc[4]), (0, 3), "3분 진행");
+    }
+
+    /// 0x0100부터 NOP만 있는 ROM. 한 프레임에 PC가 0x0100에서 약 0x4A00까지 간다.
+    fn nop_rom() -> Vec<u8> {
+        rom_with(0x00, 0x00, &[])
+    }
+
+    #[test]
+    fn breakpoint_stops_running_further_frames() {
+        let (mut session, _) = session_with(nop_rom(), MemoryStore::default());
+        session.set_breakpoints(&[0x0200]);
+        assert_eq!(
+            session.advance(FRAME_DURATION * 3),
+            1,
+            "첫 프레임에서 멈춘다"
+        );
+        assert_eq!(session.breakpoint_hit(), Some(0x0200));
+        assert_eq!(session.debug().registers().pc, 0x0200);
+        let unlimited = RunMode::Fast(FastForward::Unlimited);
+        let (mut session, _) = session_with(nop_rom(), MemoryStore::default());
+        session.set_breakpoints(&[0x0200]);
+        assert_eq!(session.run(Duration::ZERO, unlimited, &mut || true), 1);
+    }
+
+    #[test]
+    fn breakpoint_stop_is_reported_once() {
+        let (mut session, _) = session_with(nop_rom(), MemoryStore::default());
+        session.set_breakpoints(&[0x0200]);
+        session.advance(FRAME_DURATION);
+        assert_eq!(session.take_breakpoint_stop(), Some(0x0200));
+        assert_eq!(session.take_breakpoint_stop(), None, "한 번만 알린다");
+        // 일시정지했다가 계속: 한 프레임보다 짧은 시간이면 프레임을 돌리지 않는다
+        session.run(FRAME_DURATION, RunMode::Paused, &mut || false);
+        assert_eq!(session.advance(FRAME_DURATION / 2), 0);
+        assert_eq!(
+            session.take_breakpoint_stop(),
+            None,
+            "지난 정지를 다시 알리지 않는다"
+        );
+        assert_eq!(session.advance(FRAME_DURATION), 1);
+        assert_eq!(session.take_breakpoint_stop(), None, "그 자리를 통과했다");
+    }
+
+    #[test]
+    fn stepping_runs_one_instruction_or_frame_silently() {
+        let (mut session, _) = session_with(nop_rom(), MemoryStore::default());
+        let mut sink = sink();
+        session.step_instruction();
+        assert_eq!(session.debug().registers().pc, 0x0101);
+        session.step_frame();
+        assert!(session.debug().registers().pc > 0x1000);
+        session.pump_audio(&mut sink);
+        assert!(
+            sink.received.is_empty(),
+            "단계 실행 중에는 소리를 내지 않는다"
+        );
+        session.set_breakpoints(&[0x6000]);
+        session.step_frame();
+        assert_eq!(session.breakpoint_hit(), Some(0x6000));
     }
 
     /// MBC3+TIMER+RAM+BATTERY(0x10) 판 `saving_rom(true)`.
