@@ -80,6 +80,11 @@ impl SpeedControl {
         self.paused = true;
     }
 
+    /// 일시정지를 푼다 (새 ROM을 열 때).
+    pub fn resume(&mut self) {
+        self.paused = false;
+    }
+
     pub fn is_paused(&self) -> bool {
         self.paused
     }
@@ -210,5 +215,8 @@ mod tests {
         c.pause();
         c.pause();
         assert!(c.is_paused(), "pause는 토글이 아니다");
+        c.resume();
+        c.resume();
+        assert!(!c.is_paused(), "resume도 토글이 아니다");
     }
 }

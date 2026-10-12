@@ -1,4 +1,4 @@
-//! VRAM 창: 타일, 배경·창 맵, OAM, 팔레트 (스펙 §6.3).
+//! VRAM 창: 타일, 배경·윈도우 맵, OAM, 팔레트 (스펙 §6.3).
 
 use std::collections::HashMap;
 
@@ -38,7 +38,7 @@ pub struct VramView {
     pub open: bool,
     tab: Tab,
     bank: u8,
-    /// 창 맵을 볼지 (아니면 배경 맵)
+    /// 윈도우 레이어 맵을 볼지 (아니면 배경 맵)
     window_map: bool,
     textures: HashMap<String, egui::TextureHandle>,
 }
@@ -121,7 +121,7 @@ impl VramView {
     fn map(&mut self, ui: &mut egui::Ui, debug: &DebugView<'_>) {
         ui.horizontal(|ui| {
             ui.selectable_value(&mut self.window_map, false, "배경");
-            ui.selectable_value(&mut self.window_map, true, "창");
+            ui.selectable_value(&mut self.window_map, true, "윈도우");
         });
         let lcdc = debug.peek(0xFF40);
         let source = MapSource::from_lcdc(lcdc, self.window_map);

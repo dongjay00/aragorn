@@ -3,7 +3,8 @@
 use aragorn_app::session::{STATE_SLOTS, Session, THUMBNAIL_HEIGHT, THUMBNAIL_WIDTH};
 use eframe::egui::{self, Event, Key};
 
-const SLOT_KEYS: [Key; STATE_SLOTS as usize] = [
+/// 스테이트 단축키. 설정에서 게임 버튼에 지정할 수 없다.
+pub const SLOT_KEYS: [Key; STATE_SLOTS as usize] = [
     Key::F1,
     Key::F2,
     Key::F3,

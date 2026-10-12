@@ -6,6 +6,8 @@ use aragorn_app::{
 };
 use eframe::egui::{self, Key};
 
+use super::state_slots::SLOT_KEYS;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Device {
     Keyboard,
@@ -26,6 +28,7 @@ impl SettingsView {
     }
 
     /// 입력을 기다리는 칸이 있으면 이번에 눌린 키나 패드 버튼을 지정한다. 지정했으면 `true`.
+    /// F1–F10은 스테이트 단축키라 지정하지 않고 다른 키를 계속 기다린다.
     pub fn capture(
         &mut self,
         input: &mut InputConfig,
@@ -33,7 +36,7 @@ impl SettingsView {
         pad_button: Option<&str>,
     ) -> bool {
         let name = match self.capturing {
-            Some((Device::Keyboard, _)) => key.map(Key::name),
+            Some((Device::Keyboard, _)) => key.filter(|k| !SLOT_KEYS.contains(k)).map(Key::name),
             Some((Device::Gamepad, _)) => pad_button,
             None => None,
         };
@@ -54,6 +57,7 @@ impl SettingsView {
             .resizable(false)
             .show(ctx, |ui| {
                 ui.label("칸을 누른 뒤 지정할 키나 게임패드 버튼을 누르세요. 오른쪽 클릭하면 지정을 해제합니다.");
+                ui.label("F1–F10은 스테이트 단축키라 지정할 수 없습니다.");
                 ui.add_space(4.0);
                 egui::Grid::new("bindings").striped(true).show(ui, |ui| {
                     ui.strong("기능");
@@ -178,6 +182,18 @@ mod tests {
             "",
             "일시정지에서 해제된다"
         );
+    }
+
+    #[test]
+    fn state_hotkeys_cannot_be_bound() {
+        let mut input = InputConfig::default();
+        let mut view = waiting_for(Device::Keyboard, Action::A);
+        assert!(!view.capture(&mut input, Some(Key::F5), None));
+        assert!(!view.capture(&mut input, Some(Key::F10), None));
+        assert!(view.is_capturing(), "다른 키를 계속 기다린다");
+        assert_eq!(input, InputConfig::default());
+        assert!(view.capture(&mut input, Some(Key::F11), None));
+        assert_eq!(input.keyboard.get(Action::A), "F11");
     }
 
     #[test]
