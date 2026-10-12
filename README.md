@@ -125,4 +125,4 @@ Clean Architecture를 따라 세 크레이트로 나눴습니다.
 
 ## 라이선스
 
-MIT
+[MIT](LICENSE)
