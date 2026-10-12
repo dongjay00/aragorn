@@ -163,8 +163,8 @@ impl Sprite {
 
     /// 화면 안에 조금이라도 보이는지.
     pub fn on_screen(&self, tall: bool) -> bool {
-        let height = if tall { 16 } else { 8 };
-        self.x > 0 && self.x < 168 && self.y + height > 16 && self.y < 160
+        let height: u16 = if tall { 16 } else { 8 };
+        self.x > 0 && self.x < 168 && u16::from(self.y) + height > 16 && self.y < 160
     }
 }
 
@@ -388,6 +388,13 @@ mod tests {
         assert_eq!((s.bank(false), s.bank(true)), (0, 1));
         assert!(s.on_screen(false));
         assert!(!list[0].on_screen(false), "좌표 0은 화면 밖이다");
+        // 게임이 스프라이트를 숨길 때 쓰는 큰 Y
+        let hidden = Sprite {
+            y: 0xF8,
+            x: 20,
+            ..s
+        };
+        assert!(!hidden.on_screen(false) && !hidden.on_screen(true));
         let tall_top = Sprite { y: 2, x: 8, ..s };
         assert!(!tall_top.on_screen(false) && tall_top.on_screen(true));
     }
