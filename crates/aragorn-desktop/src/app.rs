@@ -76,6 +76,26 @@ pub fn mode_text(mode: RunMode) -> Option<String> {
     }
 }
 
+/// 다음 화면 갱신까지 기다릴 시간. 일시정지 중에는 게임 화면이 바뀌지 않으므로 천천히 다시 그린다.
+/// 게임패드의 일시정지 버튼은 다시 그릴 때 읽으므로 완전히 멈추지는 않는다.
+pub fn repaint_delay(mode: RunMode) -> Duration {
+    match mode {
+        RunMode::Paused => Duration::from_millis(100),
+        RunMode::Normal | RunMode::Fast(_) => Duration::ZERO,
+    }
+}
+
+/// 스테이트 저장·불러오기를 할 수 없을 때 상태 표시줄에 보일 이유.
+pub fn slot_blocked_notice(exiting: bool, update_required: bool) -> Option<&'static str> {
+    if exiting {
+        Some("종료하는 중이라 스테이트를 저장하거나 불러올 수 없습니다")
+    } else if update_required {
+        Some("업데이트가 필요해서 스테이트를 저장하거나 불러올 수 없습니다")
+    } else {
+        None
+    }
+}
+
 /// 저장하지 못한 진행이 있을 때 ROM 교체·종료를 계속할지 정한다.
 /// 처음에는 멈추고 경고하며, 사용자가 같은 동작을 한 번 더 하면 저장 없이 진행한다.
 pub fn proceed_after_flush(flushed: bool, warned: &mut bool) -> bool {
@@ -190,6 +210,8 @@ impl AragornApp {
                 )));
                 self.screen.update(ctx, session.framebuffer());
                 self.notice = Some(format!("{} 실행 중", session.title()));
+                // 일시정지한 채 다른 게임을 열어도 바로 시작한다.
+                self.speed.resume();
                 self.slots.invalidate();
                 let mut session = session;
                 session.set_breakpoints(self.debugger.breakpoints());
@@ -252,7 +274,8 @@ impl AragornApp {
     /// 스테이트 슬롯에 저장하거나 불러오고 결과를 상태 표시줄에 알린다. 종료 중이거나 강제 업데이트
     /// 중에는 하지 않는다.
     fn run_slot_command(&mut self, ctx: &egui::Context, command: SlotCommand) {
-        if self.exit_handled || self.flow.blocks_emulation() {
+        if let Some(reason) = slot_blocked_notice(self.exit_handled, self.flow.blocks_emulation()) {
+            self.notice = Some(reason.to_string());
             return;
         }
         let Some(session) = &mut self.session else {
@@ -354,7 +377,7 @@ impl AragornApp {
             session.pump_audio(sink);
         }
         self.collect_session_errors();
-        ctx.request_repaint();
+        ctx.request_repaint_after(repaint_delay(self.mode));
     }
 
     /// 저장하지 않은 배터리 세이브를 디스크에 쓴다. 저장하지 못한 진행이 남아 있으면 `false`.
@@ -633,6 +656,27 @@ mod tests {
         let ctx = egui::Context::default();
         toolbar_frame(&ctx, egui::Key::Tab, true);
         assert!(!toolbar_frame(&ctx, egui::Key::Enter, true));
+    }
+
+    #[test]
+    fn paused_emulation_repaints_slowly() {
+        assert_eq!(repaint_delay(RunMode::Paused), Duration::from_millis(100));
+        assert_eq!(repaint_delay(RunMode::Normal), Duration::ZERO);
+        assert_eq!(
+            repaint_delay(RunMode::Fast(FastForward::Unlimited)),
+            Duration::ZERO
+        );
+    }
+
+    #[test]
+    fn blocked_state_commands_explain_why() {
+        assert_eq!(slot_blocked_notice(false, false), None);
+        assert!(slot_blocked_notice(true, false).unwrap().contains("종료"));
+        assert!(
+            slot_blocked_notice(false, true)
+                .unwrap()
+                .contains("업데이트")
+        );
     }
 
     #[test]
