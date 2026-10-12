@@ -1,7 +1,9 @@
 pub mod debugger;
 pub mod fonts;
 pub mod input;
+pub mod io_view;
 pub mod screen;
 pub mod settings;
 pub mod state_slots;
 pub mod update_view;
+pub mod vram_view;

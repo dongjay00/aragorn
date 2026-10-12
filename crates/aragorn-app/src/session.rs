@@ -233,6 +233,11 @@ impl Session {
         self.gb.debug().breakpoint_hit()
     }
 
+    /// 디버거: 채널(0–3 = 채널 1–4)을 음소거한다. 스테이트를 불러와도 유지한다.
+    pub fn set_channel_muted(&mut self, channel: usize, muted: bool) {
+        self.gb.set_channel_muted(channel, muted);
+    }
+
     /// 디버거가 읽는 코어 상태.
     pub fn debug(&self) -> DebugView<'_> {
         self.gb.debug()
@@ -955,6 +960,15 @@ mod tests {
         session.set_breakpoints(&[0x6000]);
         session.step_frame();
         assert_eq!(session.breakpoint_hit(), Some(0x6000));
+    }
+
+    #[test]
+    fn channel_mutes_reach_the_core() {
+        let (mut session, _) = session_with(nop_rom(), MemoryStore::default());
+        session.set_channel_muted(3, true);
+        assert!(session.debug().channel_muted(3));
+        session.set_channel_muted(3, false);
+        assert!(!session.debug().channel_muted(3));
     }
 
     /// MBC3+TIMER+RAM+BATTERY(0x10) 판 `saving_rom(true)`.

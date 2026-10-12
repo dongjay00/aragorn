@@ -250,6 +250,46 @@ impl Ppu {
         self.palette = palette;
     }
 
+    /// CGB 모드(색 팔레트, VRAM 뱅크 2개)로 그리는지.
+    pub fn is_cgb(&self) -> bool {
+        self.cgb
+    }
+
+    /// 디버거용: VRAM 뱅크 하나(0x8000–0x9FFF, 0x2000바이트). DMG의 뱅크 1은 쓰이지 않아 0이다.
+    pub fn vram_bank_data(&self, bank: u8) -> &[u8] {
+        let start = usize::from(bank & 1) * 0x2000;
+        &self.vram[start..start + 0x2000]
+    }
+
+    /// 디버거용: OAM 전체. OAM DMA 중에도 실제 내용을 보인다.
+    pub fn oam(&self) -> &[u8; 0xA0] {
+        &self.oam
+    }
+
+    /// 디버거용: CGB 팔레트 RAM (팔레트 8개 × 색 4개 × 2바이트).
+    pub fn palette_ram(&self, kind: PaletteKind) -> &[u8; 64] {
+        match kind {
+            PaletteKind::Bg => &self.bg_palettes,
+            PaletteKind::Obj => &self.obj_palettes,
+        }
+    }
+
+    /// 화면에 그릴 때와 같은 0xRRGGBBAA 색.
+    /// - CGB: 팔레트 RAM의 `palette`(0–7)번 팔레트
+    /// - DMG: BG는 BGP, OBJ는 `palette`가 0이면 OBP0, 1이면 OBP1
+    pub fn palette_color(&self, kind: PaletteKind, palette: u8, color: u8) -> u32 {
+        let color = color & 3;
+        if self.cgb {
+            return cgb_color(self.palette_ram(kind), palette & 7, color);
+        }
+        let reg = match kind {
+            PaletteKind::Bg => self.bgp,
+            PaletteKind::Obj if palette & 1 == 0 => self.obp0,
+            PaletteKind::Obj => self.obp1,
+        };
+        self.palette[usize::from((reg >> (color * 2)) & 3)]
+    }
+
     /// 160×144, 각 픽셀은 0xRRGGBBAA.
     pub fn framebuffer(&self) -> &[u32] {
         &self.framebuffer[..]
@@ -504,6 +544,13 @@ fn write_palette(ram: &mut [u8; 64], spec: &mut u8, value: u8) {
     if *spec & 0x80 != 0 {
         *spec = 0x80 | ((*spec + 1) & 0x3F);
     }
+}
+
+/// 배경·창 팔레트인지 스프라이트 팔레트인지.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PaletteKind {
+    Bg,
+    Obj,
 }
 
 /// CGB 팔레트 RAM의 15비트 색을 0xRRGGBBAA로 바꾼다. 5비트 채널은 (c << 3) | (c >> 2)로 늘린다.
@@ -851,6 +898,39 @@ mod tests {
         assert_eq!(cgb_color(&ram, 0, 1), 0xFF00_00FF);
         assert_eq!(cgb_color(&ram, 0, 2), 0x00FF_00FF);
         assert_eq!(cgb_color(&ram, 0, 3), 0x0000_FFFF);
+    }
+
+    #[test]
+    fn debug_access_reads_both_vram_banks_and_oam() {
+        let mut p = Ppu::new(true);
+        p.write_vram(0x8000, 1);
+        p.write_reg(VBK, 0x01);
+        p.write_vram(0x9FFF, 2);
+        p.write_oam(0xFE9F, 3);
+        assert_eq!(p.vram_bank_data(0).len(), 0x2000);
+        assert_eq!(p.vram_bank_data(0)[0], 1);
+        assert_eq!(p.vram_bank_data(1)[0x1FFF], 2);
+        assert_eq!(p.oam()[0x9F], 3);
+        assert!(p.is_cgb() && !Ppu::new(false).is_cgb());
+    }
+
+    #[test]
+    fn debug_palette_colors_match_rendering() {
+        let mut p = cgb_ppu();
+        set_cgb_color(&mut p, BCPS, BCPD, 7, 3, RED);
+        set_cgb_color(&mut p, OCPS, OCPD, 2, 1, GREEN);
+        assert_eq!(p.palette_color(PaletteKind::Bg, 7, 3), 0xFF00_00FF);
+        assert_eq!(p.palette_color(PaletteKind::Obj, 2, 1), 0x00FF_00FF);
+        assert_eq!(p.palette_ram(PaletteKind::Bg)[7 * 8 + 6], 0x1F);
+
+        let mut d = Ppu::default();
+        d.write_reg(BGP, 0b11_10_01_00);
+        d.write_reg(OBP0, 0b00_00_00_11);
+        d.write_reg(OBP1, 0b00_00_10_00);
+        let shade = DEFAULT_DMG_PALETTE;
+        assert_eq!(d.palette_color(PaletteKind::Bg, 0, 2), shade[2]);
+        assert_eq!(d.palette_color(PaletteKind::Obj, 0, 0), shade[3]);
+        assert_eq!(d.palette_color(PaletteKind::Obj, 1, 1), shade[2]);
     }
 
     #[test]

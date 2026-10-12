@@ -46,6 +46,9 @@ pub struct Apu {
     nr50: u8,
     nr51: u8,
     mixer: Mixer,
+    /// 디버거의 채널 음소거 (비트 0–3 = 채널 1–4). 게임 상태가 아니라서 스테이트에 넣지 않는다.
+    #[serde(skip)]
+    muted: u8,
 }
 
 impl Default for Apu {
@@ -69,6 +72,7 @@ impl Apu {
             nr50: 0x77,
             nr51: 0xF3,
             mixer: Mixer::default(),
+            muted: 0,
         };
         apu.write(0xFF11, 0xBF);
         apu.write(0xFF12, 0xF3);
@@ -296,6 +300,9 @@ impl Apu {
         let (mut left, mut right) = (0.0, 0.0);
         for (i, digital) in channels.into_iter().enumerate() {
             let Some(digital) = digital else { continue };
+            if self.muted & (1 << i) != 0 {
+                continue;
+            }
             let analog = f32::from(digital) / 15.0;
             if self.nr51 & (0x10 << i) != 0 {
                 left += analog;
@@ -316,12 +323,29 @@ impl Apu {
     /// 스테이트에서 읽은 APU에 호스트 설정을 옮기고, 레지스터 비트 폭을 넘는 값을 감싼다.
     pub(crate) fn adopt_host(&mut self, host: &Apu) {
         self.mixer.adopt_host(&host.mixer);
+        self.muted = host.muted;
         self.fs_step &= 7;
         self.sweep.sanitize();
         self.ch1.sanitize();
         self.ch2.sanitize();
         self.ch3.sanitize();
         self.ch4.sanitize();
+    }
+
+    /// `channel`(0–3 = 채널 1–4)을 믹서에서 뺀다. 채널 자체와 레지스터는 그대로 돈다.
+    pub fn set_channel_muted(&mut self, channel: usize, muted: bool) {
+        if channel < 4 {
+            let bit = 1 << channel;
+            self.muted = if muted {
+                self.muted | bit
+            } else {
+                self.muted & !bit
+            };
+        }
+    }
+
+    pub fn channel_muted(&self, channel: usize) -> bool {
+        channel < 4 && self.muted & (1 << channel) != 0
     }
 
     /// 쌓인 인터리브 스테레오 샘플을 `out` 뒤에 붙인다.
@@ -408,6 +432,27 @@ mod tests {
         let (left, right) = apu.output();
         assert_eq!(left, 0.0);
         assert!(right > 0.0);
+    }
+
+    #[test]
+    fn muted_channel_is_left_out_of_the_mix_only() {
+        let mut apu = Apu::new(false);
+        apu.write(0xFF25, 0x22); // 채널 2 → 양쪽
+        apu.write(0xFF16, 0xC0);
+        apu.write(0xFF17, 0xF0);
+        apu.write(0xFF18, 0xFF);
+        apu.write(0xFF19, 0x87);
+        for _ in 0..100 {
+            apu.tick(4);
+        }
+        assert!(apu.output().0 > 0.0);
+        apu.set_channel_muted(1, true);
+        apu.set_channel_muted(7, true); // 범위 밖은 무시
+        assert!(apu.channel_muted(1) && !apu.channel_muted(0) && !apu.channel_muted(7));
+        assert_eq!(apu.output(), (0.0, 0.0));
+        assert_eq!(apu.read(NR52) & 0x02, 0x02, "채널은 계속 켜져 있다");
+        apu.set_channel_muted(1, false);
+        assert!(apu.output().0 > 0.0);
     }
 
     #[test]

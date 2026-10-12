@@ -6,7 +6,7 @@ use crate::cpu::{Cpu, IllegalOpcode, Registers, disasm};
 use crate::debugger::Debugger;
 use crate::joypad::Button;
 use crate::model::Model;
-use crate::ppu;
+use crate::ppu::{self, PaletteKind};
 use crate::state::{self, RomId, StateError};
 
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -145,6 +145,11 @@ impl GameBoy {
         self.bus.apu_mut().set_sample_rate(rate);
     }
 
+    /// 디버거의 채널 음소거. `channel`은 0–3(채널 1–4)이다. 스테이트를 불러와도 유지한다.
+    pub fn set_channel_muted(&mut self, channel: usize, muted: bool) {
+        self.bus.apu_mut().set_channel_muted(channel, muted);
+    }
+
     /// 쌓인 소리를 인터리브 스테레오 f32(-1.0–1.0)로 `out` 뒤에 붙인다.
     /// 꺼내 가지 않으면 오래된 소리는 버린다(약 1초 분량까지만 남긴다).
     pub fn drain_audio(&mut self, out: &mut Vec<f32>) {
@@ -233,6 +238,35 @@ impl<'a> DebugView<'a> {
     /// `addr`의 명령을 해석한다. 메모리를 읽어도 게임 상태는 바뀌지 않는다.
     pub fn disassemble(&self, addr: u16) -> disasm::Instruction {
         disasm::disassemble(addr, |a| self.peek(a))
+    }
+
+    /// CGB 모드로 그리는지 (VRAM 뱅크 2개와 색 팔레트).
+    pub fn cgb(&self) -> bool {
+        self.gb.bus.ppu().is_cgb()
+    }
+
+    /// VRAM 뱅크 하나 (0x8000–0x9FFF에 해당하는 0x2000바이트).
+    pub fn vram(&self, bank: u8) -> &'a [u8] {
+        self.gb.bus.ppu().vram_bank_data(bank)
+    }
+
+    /// OAM 전체 (스프라이트 40개 × 4바이트).
+    pub fn oam(&self) -> &'a [u8; 0xA0] {
+        self.gb.bus.ppu().oam()
+    }
+
+    /// CGB 팔레트 RAM.
+    pub fn palette_ram(&self, kind: PaletteKind) -> &'a [u8; 64] {
+        self.gb.bus.ppu().palette_ram(kind)
+    }
+
+    /// 화면에 그릴 때와 같은 0xRRGGBBAA 색 (`ppu::Ppu::palette_color`).
+    pub fn palette_color(&self, kind: PaletteKind, palette: u8, color: u8) -> u32 {
+        self.gb.bus.ppu().palette_color(kind, palette, color)
+    }
+
+    pub fn channel_muted(&self, channel: usize) -> bool {
+        self.gb.bus.apu().channel_muted(channel)
     }
 }
 
@@ -594,6 +628,37 @@ mod tests {
         assert!(gb.debug().trace().is_empty());
         gb.run_frame();
         assert_eq!(gb.debug().breakpoint_hit(), Some(0x0100));
+    }
+
+    #[test]
+    fn channel_mutes_survive_loading_a_state() {
+        let mut gb = gb_with_program(&[0x18, 0xFE]);
+        let state = gb.save_state(0);
+        gb.set_channel_muted(2, true);
+        gb.load_state(&state, 0).unwrap();
+        assert!(gb.debug().channel_muted(2));
+        assert!(!gb.debug().channel_muted(0));
+        assert!(!gb_with_program(&[0x18, 0xFE]).debug().channel_muted(2));
+    }
+
+    #[test]
+    fn debug_view_exposes_vram_banks_oam_and_palettes() {
+        let mut rom = test_rom(0x00, 0x00, 0x80);
+        // LD A,1 ; LDH (VBK),A ; LD A,$5A ; LD ($8010),A ; LD A,$77 ; LD ($FE00),A ; JR -2
+        let program = [
+            0x3E, 0x01, 0xE0, 0x4F, 0x3E, 0x5A, 0xEA, 0x10, 0x80, 0x3E, 0x77, 0xEA, 0x00, 0xFE,
+            0x18, 0xFE,
+        ];
+        rom[0x0100..0x0100 + program.len()].copy_from_slice(&program);
+        let mut gb = GameBoy::new(rom, Model::Cgb).unwrap();
+        gb.run_frame();
+        let debug = gb.debug();
+        assert!(debug.cgb());
+        assert_eq!(debug.vram(1)[0x10], 0x5A);
+        assert_eq!(debug.vram(0)[0x10], 0x00);
+        assert_eq!(debug.oam()[0], 0x77);
+        assert_eq!(debug.palette_ram(PaletteKind::Bg).len(), 64);
+        assert_eq!(debug.palette_color(PaletteKind::Bg, 0, 0), 0xFFFF_FFFF);
     }
 
     #[test]

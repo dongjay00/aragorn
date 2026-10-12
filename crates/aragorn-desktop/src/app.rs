@@ -4,10 +4,12 @@ use crate::{
     ui::{
         debugger::{DebugCommand, DebuggerView},
         input::{self, InputFrame, Keymap, TypingGuard},
+        io_view::IoView,
         screen::ScreenView,
         settings::SettingsView,
         state_slots::{self, SlotCommand, SlotsView},
         update_view::{self, UpdateUiAction},
+        vram_view::VramView,
     },
     update_worker::UpdateWorker,
 };
@@ -114,6 +116,8 @@ pub struct AragornApp {
     settings: SettingsView,
     slots: SlotsView,
     debugger: DebuggerView,
+    vram: VramView,
+    io: IoView,
     typing_guard: TypingGuard,
 }
 
@@ -158,6 +162,8 @@ impl AragornApp {
             settings: SettingsView::default(),
             slots: SlotsView::default(),
             debugger: DebuggerView::default(),
+            vram: VramView::default(),
+            io: IoView::default(),
             typing_guard: TypingGuard::default(),
         };
         if app.worker.is_some() {
@@ -187,6 +193,9 @@ impl AragornApp {
                 self.slots.invalidate();
                 let mut session = session;
                 session.set_breakpoints(self.debugger.breakpoints());
+                for (channel, muted) in self.io.muted().into_iter().enumerate() {
+                    session.set_channel_muted(channel, muted);
+                }
                 self.session = Some(session);
                 self.last_tick = Instant::now();
                 self.collect_session_errors();
@@ -274,12 +283,17 @@ impl AragornApp {
     /// 디버거 창의 요청을 처리한다. 단계 실행은 일시정지한 상태에서 한다. 종료 중이거나 강제 업데이트
     /// 중에는 하지 않는다.
     fn run_debug_command(&mut self, ctx: &egui::Context, command: DebugCommand) {
-        if self.exit_handled || self.flow.blocks_emulation() {
-            return;
-        }
         let Some(session) = &mut self.session else {
             return;
         };
+        // 음소거는 게임을 진행하지 않으니 언제든 바꾼다. 창의 체크 상태와 어긋나지 않게 한다.
+        if let DebugCommand::SetChannelMuted(channel, muted) = command {
+            session.set_channel_muted(channel, muted);
+            return;
+        }
+        if self.exit_handled || self.flow.blocks_emulation() {
+            return;
+        }
         match command {
             DebugCommand::TogglePause => self.speed.toggle_pause(),
             DebugCommand::StepInstruction | DebugCommand::StepFrame => {
@@ -292,6 +306,7 @@ impl AragornApp {
                 self.screen.update(ctx, session.framebuffer());
             }
             DebugCommand::SetBreakpoints(pcs) => session.set_breakpoints(&pcs),
+            DebugCommand::SetChannelMuted(..) => unreachable!("위에서 처리한다"),
         }
         self.collect_session_errors();
     }
@@ -332,7 +347,7 @@ impl AragornApp {
         if let Some(pc) = session.take_breakpoint_stop() {
             self.speed.pause();
             self.mode = RunMode::Paused;
-            self.debugger.open = true;
+            self.debugger.cpu_open = true;
             self.notice = Some(format!("브레이크포인트 ${pc:04X}에서 멈췄습니다"));
         }
         if let Some(sink) = self.audio.sink() {
@@ -455,9 +470,12 @@ impl eframe::App for AragornApp {
                 if ui.button("ROM 열기").clicked() {
                     open_requested = true;
                 }
-                if ui.button("디버거").clicked() {
-                    self.debugger.open = !self.debugger.open;
-                }
+                ui.menu_button("디버거", |ui| {
+                    ui.checkbox(&mut self.debugger.cpu_open, "CPU");
+                    ui.checkbox(&mut self.debugger.memory_open, "메모리");
+                    ui.checkbox(&mut self.vram.open, "VRAM");
+                    ui.checkbox(&mut self.io.open, "I/O");
+                });
                 if ui.button("설정").clicked() {
                     self.settings.open = !self.settings.open;
                 }
@@ -522,9 +540,14 @@ impl eframe::App for AragornApp {
         });
 
         let debug_commands = match &self.session {
-            Some(session) => self
-                .debugger
-                .show(ui.ctx(), session, self.speed.is_paused()),
+            Some(session) => {
+                let mut commands = self
+                    .debugger
+                    .show(ui.ctx(), session, self.speed.is_paused());
+                self.vram.show(ui.ctx(), &session.debug());
+                commands.extend(self.io.show(ui.ctx(), &session.debug()));
+                commands
+            }
             None => Vec::new(),
         };
         for command in debug_commands {
