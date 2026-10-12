@@ -17,6 +17,8 @@ pub enum DebugCommand {
     StepInstruction,
     StepFrame,
     SetBreakpoints(Vec<u16>),
+    /// 채널(0–3)의 음소거를 켜거나 끈다.
+    SetChannelMuted(usize, bool),
 }
 
 /// `0150`, `$0150`, `0x0150`, `c000` 같은 16진수 주소. 공백은 무시한다.
@@ -69,7 +71,8 @@ pub fn toggle_breakpoint(list: &mut Vec<u16>, pc: u16) {
 
 #[derive(Default)]
 pub struct DebuggerView {
-    pub open: bool,
+    pub cpu_open: bool,
+    pub memory_open: bool,
     breakpoints: Vec<u16>,
     new_breakpoint: String,
     memory_address: String,
@@ -90,20 +93,19 @@ impl DebuggerView {
         paused: bool,
     ) -> Vec<DebugCommand> {
         let mut commands = Vec::new();
-        if !self.open {
-            return commands;
-        }
         let debug = session.debug();
-        let mut open = self.open;
+        let mut open = self.cpu_open;
         egui::Window::new("CPU")
             .open(&mut open)
             .default_width(360.0)
             .show(ctx, |ui| self.cpu_window(ui, &debug, paused, &mut commands));
+        self.cpu_open = open;
+        let mut open = self.memory_open;
         egui::Window::new("메모리")
             .open(&mut open)
             .default_width(480.0)
             .show(ctx, |ui| self.memory_window(ui, &debug));
-        self.open = open;
+        self.memory_open = open;
         commands
     }
 
