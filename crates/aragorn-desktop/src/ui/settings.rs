@@ -1,8 +1,8 @@
-//! 설정 창: 키보드·게임패드 매핑과 배속 속도 (스펙 §6.2).
+//! 설정 창: 키보드·게임패드 매핑, 기본 속도와 배속 속도 (스펙 §6.2).
 
 use aragorn_app::{
     input::{Action, InputConfig},
-    pacing::FastForward,
+    pacing::{BaseSpeed, FastForward},
 };
 use eframe::egui::{self, Key};
 
@@ -73,6 +73,15 @@ impl SettingsView {
                     }
                 });
                 ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    ui.label("기본 속도:");
+                    for speed in BaseSpeed::ALL {
+                        changed |= ui
+                            .radio_value(&mut input.base_speed, speed, speed.label())
+                            .changed();
+                    }
+                });
+                ui.label("2배·4배에서는 소리가 빠르고 높게 들립니다. 무제한에서는 소리가 나지 않습니다.");
                 ui.horizontal(|ui| {
                     ui.label("배속 속도:");
                     for speed in FastForward::ALL {

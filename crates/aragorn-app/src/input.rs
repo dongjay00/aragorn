@@ -3,7 +3,7 @@
 //! 키와 패드 버튼은 이름 문자열로 저장한다. 이름을 실제 키로 바꾸는 일은 데스크톱 계층이 한다.
 //! 빈 문자열은 "지정 안 함"이다.
 
-use crate::pacing::FastForward;
+use crate::pacing::{BaseSpeed, FastForward};
 use gb_core::Button;
 use serde::{Deserialize, Serialize};
 
@@ -22,10 +22,12 @@ pub enum Action {
     FastForward,
     /// 누를 때마다 일시정지 켜기/끄기
     Pause,
+    /// 누를 때마다 음소거 켜기/끄기
+    Mute,
 }
 
 impl Action {
-    pub const ALL: [Action; 10] = [
+    pub const ALL: [Action; 11] = [
         Action::Up,
         Action::Down,
         Action::Left,
@@ -36,6 +38,7 @@ impl Action {
         Action::Select,
         Action::FastForward,
         Action::Pause,
+        Action::Mute,
     ];
 
     /// 게임보이 버튼이면 그 버튼.
@@ -49,7 +52,7 @@ impl Action {
             Action::B => Button::B,
             Action::Select => Button::Select,
             Action::Start => Button::Start,
-            Action::FastForward | Action::Pause => return None,
+            Action::FastForward | Action::Pause | Action::Mute => return None,
         })
     }
 
@@ -65,6 +68,7 @@ impl Action {
             Action::Start => "Start",
             Action::FastForward => "배속 (누르는 동안)",
             Action::Pause => "일시정지",
+            Action::Mute => "음소거",
         }
     }
 }
@@ -82,6 +86,7 @@ pub struct Bindings {
     pub start: String,
     pub fast_forward: String,
     pub pause: String,
+    pub mute: String,
 }
 
 impl Bindings {
@@ -98,6 +103,7 @@ impl Bindings {
             "Enter",
             "Tab",
             "Escape",
+            "M",
         ])
     }
 
@@ -114,11 +120,12 @@ impl Bindings {
             "Start",
             "RightTrigger",
             "",
+            "",
         ])
     }
 
-    /// 순서: 오른쪽, 왼쪽, 위, 아래, A, B, Select, Start, 배속, 일시정지.
-    fn from_names(names: [&str; 10]) -> Self {
+    /// 순서: 오른쪽, 왼쪽, 위, 아래, A, B, Select, Start, 배속, 일시정지, 음소거.
+    fn from_names(names: [&str; 11]) -> Self {
         let [
             right,
             left,
@@ -130,6 +137,7 @@ impl Bindings {
             start,
             fast_forward,
             pause,
+            mute,
         ] = names.map(str::to_string);
         Self {
             right,
@@ -142,6 +150,7 @@ impl Bindings {
             start,
             fast_forward,
             pause,
+            mute,
         }
     }
 
@@ -157,6 +166,7 @@ impl Bindings {
             Action::Start => &self.start,
             Action::FastForward => &self.fast_forward,
             Action::Pause => &self.pause,
+            Action::Mute => &self.mute,
         }
     }
 
@@ -172,6 +182,7 @@ impl Bindings {
             Action::Start => &mut self.start,
             Action::FastForward => &mut self.fast_forward,
             Action::Pause => &mut self.pause,
+            Action::Mute => &mut self.mute,
         }
     }
 
@@ -199,6 +210,8 @@ pub struct InputConfig {
     pub keyboard: Bindings,
     pub gamepad: Bindings,
     pub fast_forward: FastForward,
+    /// 배속 키를 누르지 않을 때의 속도
+    pub base_speed: BaseSpeed,
 }
 
 impl Default for InputConfig {
@@ -207,6 +220,7 @@ impl Default for InputConfig {
             keyboard: Bindings::keyboard_default(),
             gamepad: Bindings::gamepad_default(),
             fast_forward: FastForward::default(),
+            base_speed: BaseSpeed::default(),
         }
     }
 }
@@ -257,6 +271,8 @@ mod partial {
         fast_forward: Option<String>,
         #[serde(deserialize_with = "lenient")]
         pause: Option<String>,
+        #[serde(deserialize_with = "lenient")]
+        mute: Option<String>,
     }
 
     impl PartialBindings {
@@ -272,6 +288,7 @@ mod partial {
                 (self.start, &mut base.start),
                 (self.fast_forward, &mut base.fast_forward),
                 (self.pause, &mut base.pause),
+                (self.mute, &mut base.mute),
             ];
             for (value, slot) in fields {
                 if let Some(value) = value {
@@ -292,6 +309,9 @@ mod partial {
         /// 모르는 값이면 설정 전체를 버리지 않고 기본 배속을 쓴다.
         #[serde(deserialize_with = "lenient")]
         pub fast_forward: Option<String>,
+        /// 모르는 값이면 보통 속도를 쓴다.
+        #[serde(deserialize_with = "lenient")]
+        pub base_speed: Option<String>,
     }
 }
 
@@ -311,6 +331,11 @@ impl<'de> Deserialize<'de> for InputConfig {
                 .fast_forward
                 .as_deref()
                 .and_then(FastForward::from_name)
+                .unwrap_or_default(),
+            base_speed: p
+                .base_speed
+                .as_deref()
+                .and_then(BaseSpeed::from_name)
                 .unwrap_or_default(),
         })
     }
@@ -338,6 +363,7 @@ mod tests {
         assert_eq!(k.get(Action::Select), "Backspace");
         assert_eq!(k.get(Action::FastForward), "Tab");
         assert_eq!(k.get(Action::Pause), "Escape");
+        assert_eq!(k.get(Action::Mute), "M");
     }
 
     #[test]
@@ -377,7 +403,7 @@ mod tests {
     #[test]
     fn missing_entries_fall_back_to_their_own_defaults() {
         let c: InputConfig = serde_json::from_str(
-            r#"{"keyboard":{"a":"K"},"gamepad":{"pause":"Mode"},"fast_forward":"x2"}"#,
+            r#"{"keyboard":{"a":"K"},"gamepad":{"pause":"Mode"},"fast_forward":"x2","base_speed":"x4"}"#,
         )
         .unwrap();
         let mut keyboard = Bindings::keyboard_default();
@@ -387,12 +413,21 @@ mod tests {
         assert_eq!(c.keyboard, keyboard);
         assert_eq!(c.gamepad, gamepad);
         assert_eq!(c.fast_forward, FastForward::X2);
+        assert_eq!(c.base_speed, BaseSpeed::X4);
     }
 
     #[test]
     fn unknown_fast_forward_falls_back_to_default() {
         let c: InputConfig = serde_json::from_str(r#"{"fast_forward":"x8"}"#).unwrap();
         assert_eq!(c, InputConfig::default());
+    }
+
+    #[test]
+    fn unknown_base_speed_falls_back_to_normal() {
+        for json in [r#"{"base_speed":"unlimited"}"#, r#"{"base_speed":2}"#] {
+            let c: InputConfig = serde_json::from_str(json).unwrap();
+            assert_eq!(c, InputConfig::default(), "{json}");
+        }
     }
 
     #[test]
@@ -412,6 +447,7 @@ mod tests {
         let mut c = InputConfig::default();
         c.keyboard.bind(Action::Pause, "P");
         c.fast_forward = FastForward::Unlimited;
+        c.base_speed = BaseSpeed::X2;
         let json = serde_json::to_string(&c).unwrap();
         assert_eq!(serde_json::from_str::<InputConfig>(&json).unwrap(), c);
     }

@@ -218,6 +218,7 @@ impl AragornApp {
                 for (channel, muted) in self.io.muted().into_iter().enumerate() {
                     session.set_channel_muted(channel, muted);
                 }
+                session.set_sound_off(self.config.audio.muted);
                 self.session = Some(session);
                 self.last_tick = Instant::now();
                 self.collect_session_errors();
@@ -334,6 +335,15 @@ impl AragornApp {
         self.collect_session_errors();
     }
 
+    /// 음소거를 바꾸고 설정에 저장한다.
+    fn set_muted(&mut self, muted: bool) {
+        self.config.audio.muted = muted;
+        if let Some(session) = &mut self.session {
+            session.set_sound_off(muted);
+        }
+        self.save_config();
+    }
+
     fn input_config_changed(&mut self) {
         self.keymap = Keymap::new(&self.config.input.keyboard);
         self.save_config();
@@ -344,6 +354,10 @@ impl AragornApp {
         let now = Instant::now();
         let elapsed = now - self.last_tick;
         self.last_tick = now;
+        // 음소거는 게임을 진행하지 않으니 ROM이 없거나 멈춘 동안에도 바꾼다.
+        if input.as_ref().is_some_and(|f| f.mute_pressed) {
+            self.set_muted(!self.config.audio.muted);
+        }
         let Some(session) = &mut self.session else {
             return;
         };
@@ -361,7 +375,12 @@ impl AragornApp {
         for (button, pressed) in buttons {
             session.set_button(button, pressed);
         }
-        self.mode = self.speed.mode(fast_held, self.config.input.fast_forward);
+        let input_config = &self.config.input;
+        self.mode = self.speed.mode(
+            fast_held,
+            input_config.fast_forward,
+            input_config.base_speed,
+        );
         let started = Instant::now();
         let mut within_budget = || started.elapsed() < UNLIMITED_BUDGET;
         if session.run(elapsed, self.mode, &mut within_budget) > 0 {
@@ -508,6 +527,10 @@ impl eframe::App for AragornApp {
                         slot_command = self.slots.show(ui, session, now);
                     });
                 }
+                let mut muted = self.config.audio.muted;
+                if ui.checkbox(&mut muted, "음소거").changed() {
+                    self.set_muted(muted);
+                }
                 ui.separator();
                 let mut auto_download = self.flow.prefs().auto_download;
                 if ui
@@ -535,6 +558,10 @@ impl eframe::App for AragornApp {
                     && let Some(text) = mode_text(self.mode)
                 {
                     ui.strong(text);
+                    ui.separator();
+                }
+                if self.session.is_some() && self.config.audio.muted {
+                    ui.strong("음소거");
                     ui.separator();
                 }
                 if let Some(notice) = &self.notice {

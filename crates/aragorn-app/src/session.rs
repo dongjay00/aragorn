@@ -1,7 +1,7 @@
 //! 에뮬레이션 세션: 불러온 ROM 하나, 그 실행 속도, 배터리 세이브 (스펙 §5.1).
 
 use crate::audio::{self, AudioSink};
-use crate::pacing::{FramePacer, RunMode, UNLIMITED_MAX_FRAMES};
+use crate::pacing::{FastForward, FramePacer, RunMode, UNLIMITED_MAX_FRAMES};
 use gb_core::{Button, CartError, DebugView, GameBoy, Model};
 use std::{io, time::Duration};
 
@@ -80,8 +80,15 @@ pub struct Session {
     store_blocked: bool,
     /// 브레이크포인트에 새로 걸려 멈춘 PC. `take_breakpoint_stop`이 한 번만 꺼내 간다.
     breakpoint_stop: Option<u16>,
-    /// 배속이나 일시정지로 소리를 내지 않는 중인지. 다음 `pump_audio`가 만든 소리를 버린다.
-    muted: bool,
+    /// 무제한 배속이나 일시정지로 소리를 내지 않는 중인지. 다음 `pump_audio`가 만든 소리를 버린다.
+    silent: bool,
+    /// 사용자가 소리를 껐는지 (음소거).
+    sound_off: bool,
+    /// 지금 실행 배율. 2×/4×에서는 샘플레이트를 배율로 나눠, 실제 시간당 샘플 수를 장치에 맞춘다.
+    /// 그래서 소리가 배율만큼 빠르고 높게 들린다.
+    audio_speed: u32,
+    /// 장치 샘플레이트에 버퍼 보정을 곱한 값. 아직 장치를 모르면 `None`.
+    host_rate: Option<f64>,
     /// 상태 표시줄에 보일 오류 문구.
     errors: Vec<String>,
     /// `pump_audio`가 재사용하는 샘플 버퍼.
@@ -132,7 +139,10 @@ impl Session {
             save_failed: false,
             store_blocked,
             breakpoint_stop: None,
-            muted: false,
+            silent: false,
+            sound_off: false,
+            audio_speed: 1,
+            host_rate: None,
             errors,
             audio: Vec::new(),
         })
@@ -157,14 +167,28 @@ impl Session {
     /// - 2×/4×: 경과 시간의 배수만큼 돌린다.
     /// - 무제한: `keep_going`이 참인 동안 돌린다(최소 1프레임, 최대 `UNLIMITED_MAX_FRAMES`).
     ///
-    /// 보통 속도가 아니면 소리를 버린다.
+    /// 무제한 배속과 일시정지에서는 소리를 버린다.
     pub fn run(
         &mut self,
         elapsed: Duration,
         mode: RunMode,
         keep_going: &mut dyn FnMut() -> bool,
     ) -> u32 {
-        self.muted = mode != RunMode::Normal;
+        self.silent = matches!(
+            mode,
+            RunMode::Paused | RunMode::Fast(FastForward::Unlimited)
+        );
+        let speed = match mode {
+            RunMode::Fast(fast) => fast.multiplier().unwrap_or(1),
+            RunMode::Normal | RunMode::Paused => 1,
+        };
+        if speed != self.audio_speed {
+            // 이번에 돌릴 프레임부터 새 배율의 샘플레이트로 만든다.
+            self.audio_speed = speed;
+            if let Some(rate) = self.host_rate {
+                self.gb.set_sample_rate(rate / f64::from(speed));
+            }
+        }
         let frames = match mode {
             RunMode::Paused => {
                 self.pacer.reset();
@@ -213,13 +237,13 @@ impl Session {
 
     /// 디버거: 명령 하나를 실행한다(브레이크포인트는 보지 않는다). 소리는 내지 않는다.
     pub fn step_instruction(&mut self) {
-        self.muted = true;
+        self.silent = true;
         self.gb.step_instruction();
     }
 
     /// 디버거: 프레임 하나를 실행한다. 브레이크포인트에 걸리면 그 자리에서 멈춘다. 소리는 내지 않는다.
     pub fn step_frame(&mut self) {
-        self.muted = true;
+        self.silent = true;
         self.run_one_frame();
     }
 
@@ -234,6 +258,11 @@ impl Session {
     }
 
     /// 디버거: 채널(0–3 = 채널 1–4)을 음소거한다. 스테이트를 불러와도 유지한다.
+    /// 음소거를 켜거나 끈다. 게임은 그대로 돌고 소리만 장치로 보내지 않는다.
+    pub fn set_sound_off(&mut self, off: bool) {
+        self.sound_off = off;
+    }
+
     pub fn set_channel_muted(&mut self, channel: usize, muted: bool) {
         self.gb.set_channel_muted(channel, muted);
     }
@@ -256,13 +285,13 @@ impl Session {
     /// 샘플레이트를 보정한다. `advance` 뒤에 부른다.
     pub fn pump_audio(&mut self, sink: &mut dyn AudioSink) {
         self.gb.drain_audio(&mut self.audio);
-        if !self.muted {
+        if !self.silent && !self.sound_off {
             sink.push(&self.audio);
         }
         self.audio.clear();
-        let rate = sink.sample_rate();
-        let adjust = audio::rate_adjust(sink.fill_ratio());
-        self.gb.set_sample_rate(f64::from(rate) * adjust);
+        let rate = f64::from(sink.sample_rate()) * audio::rate_adjust(sink.fill_ratio());
+        self.host_rate = Some(rate);
+        self.gb.set_sample_rate(rate / f64::from(self.audio_speed));
     }
 
     /// 지금 저장한다면 세이브 파일에 쓸 내용.
@@ -374,7 +403,7 @@ impl Session {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::pacing::{FRAME_DURATION, FastForward};
+    use crate::pacing::FRAME_DURATION;
     use std::{
         cell::{Cell, RefCell},
         collections::HashMap,
@@ -770,26 +799,74 @@ mod tests {
         );
     }
 
+    /// 실제 시간 한 프레임(`FRAME_DURATION`) 동안 48kHz 장치가 가져가는 인터리브 샘플 수.
+    fn one_real_frame_of_samples() -> f64 {
+        48_000.0 * FRAME_DURATION.as_secs_f64() * 2.0
+    }
+
+    fn assert_about_one_real_frame(received: usize, what: &str) {
+        assert!(
+            (received as f64 - one_real_frame_of_samples()).abs() < 20.0,
+            "{what}: {received}"
+        );
+    }
+
     #[test]
-    fn fast_forward_and_pause_mute_audio_until_normal_speed() {
+    fn unlimited_and_pause_mute_audio_until_normal_speed() {
         let (mut session, _) = session_with(looping_rom(), MemoryStore::default());
         let mut sink = sink();
-        session.run(FRAME_DURATION, RunMode::Fast(FastForward::X2), &mut || {
-            false
-        });
+        session.run(
+            FRAME_DURATION,
+            RunMode::Fast(FastForward::Unlimited),
+            &mut || false,
+        );
         session.pump_audio(&mut sink);
-        assert!(sink.received.is_empty(), "배속 중에는 소리를 버린다");
+        assert!(sink.received.is_empty(), "무제한 배속 중에는 소리를 버린다");
         session.run(FRAME_DURATION, RunMode::Paused, &mut || false);
         session.pump_audio(&mut sink);
         assert!(sink.received.is_empty());
         session.advance(FRAME_DURATION);
         session.pump_audio(&mut sink);
-        let frame = 48_000.0 * FRAME_DURATION.as_secs_f64() * 2.0;
-        assert!(
-            (sink.received.len() as f64 - frame).abs() < 20.0,
-            "보통 속도로 돌아오면 한 프레임 분량만 낸다: {}",
-            sink.received.len()
+        assert_about_one_real_frame(
+            sink.received.len(),
+            "보통 속도로 돌아오면 한 프레임 분량만 낸다",
         );
+    }
+
+    #[test]
+    fn fast_forward_plays_sound_at_real_time_rate() {
+        for fast in [FastForward::X2, FastForward::X4] {
+            let (mut session, _) = session_with(looping_rom(), MemoryStore::default());
+            let mut sink = sink();
+            session.advance(FRAME_DURATION);
+            session.pump_audio(&mut sink);
+            sink.received.clear();
+            let frames = session.run(FRAME_DURATION, RunMode::Fast(fast), &mut || false);
+            assert_eq!(Some(frames), fast.multiplier());
+            session.pump_audio(&mut sink);
+            assert_about_one_real_frame(
+                sink.received.len(),
+                "배속 중에도 실제 시간만큼만 소리를 낸다",
+            );
+            session.advance(FRAME_DURATION);
+            sink.received.clear();
+            session.pump_audio(&mut sink);
+            assert_about_one_real_frame(sink.received.len(), "보통 속도로 돌아온다");
+        }
+    }
+
+    #[test]
+    fn sound_off_drops_audio_until_turned_on() {
+        let (mut session, _) = session_with(looping_rom(), MemoryStore::default());
+        let mut sink = sink();
+        session.set_sound_off(true);
+        session.advance(FRAME_DURATION);
+        session.pump_audio(&mut sink);
+        assert!(sink.received.is_empty(), "음소거 중에는 소리를 버린다");
+        session.set_sound_off(false);
+        session.advance(FRAME_DURATION);
+        session.pump_audio(&mut sink);
+        assert_about_one_real_frame(sink.received.len(), "음소거를 끄면 다시 낸다");
     }
 
     #[test]
