@@ -29,12 +29,15 @@ jobs:
           - os: windows-latest
             exe: aragorn.exe
             channel: win
+            icon: crates/aragorn-desktop/assets/icon/aragorn.ico
           - os: macos-latest
             exe: aragorn
             channel: osx
+            icon: crates/aragorn-desktop/assets/icon/aragorn.icns
           - os: ubuntu-22.04
             exe: aragorn
             channel: linux
+            icon: crates/aragorn-desktop/assets/icon/aragorn.png
     runs-on: ${{ matrix.os }}
     env:
       VERSION: ${{ needs.prepare.outputs.version }}
@@ -63,7 +66,8 @@ jobs:
           cp "target/release/${{ matrix.exe }}" publish/
           # 채널 이름은 앱의 PACKAGE_CHANNEL(win/osx/linux)과 같아야 한다.
           vpk pack --packId Aragorn --packVersion "$VERSION" --packDir publish \
-            --mainExe "${{ matrix.exe }}" --packTitle Aragorn --channel "${{ matrix.channel }}" --outputDir Releases
+            --mainExe "${{ matrix.exe }}" --packTitle Aragorn --channel "${{ matrix.channel }}" --icon "${{ matrix.icon }}" \
+            --outputDir Releases
       - uses: actions/upload-artifact@v4
         with:
           name: package-${{ matrix.channel }}

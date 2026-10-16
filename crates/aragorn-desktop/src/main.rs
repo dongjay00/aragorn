@@ -11,6 +11,8 @@ use eframe::egui;
 use std::{path::PathBuf, sync::Arc, time::Duration};
 
 const POLICY_TIMEOUT: Duration = Duration::from_secs(5);
+/// 창 아이콘. `scripts/gen-icons.py`로 만든다.
+const ICON_PNG: &[u8] = include_bytes!("../assets/icon/aragorn.png");
 
 fn main() -> eframe::Result {
     // Velopack 설치/제거 훅 처리. 반드시 가장 먼저 호출한다.
@@ -43,7 +45,10 @@ fn main() -> eframe::Result {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title(format!("Aragorn v{}", build_info::current_version()))
-            .with_inner_size([640.0, 576.0]),
+            .with_inner_size([640.0, 576.0])
+            .with_icon(
+                eframe::icon_data::from_png_bytes(ICON_PNG).expect("내장 아이콘은 올바른 PNG다"),
+            ),
         ..Default::default()
     };
     eframe::run_native(
@@ -61,4 +66,15 @@ fn main() -> eframe::Result {
             Ok(Box::new(AragornApp::new(&cc.egui_ctx, deps)))
         }),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn embedded_icon_is_a_256px_png() {
+        let icon = eframe::icon_data::from_png_bytes(ICON_PNG).unwrap();
+        assert_eq!((icon.width, icon.height), (256, 256));
+    }
 }
