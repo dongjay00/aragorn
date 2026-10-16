@@ -42,7 +42,9 @@ Rust로 만든 게임보이 / 게임보이 컬러 에뮬레이터입니다.
 
 - 아직 코드 서명을 하지 않았습니다. 그래서 처음 실행할 때 경고가 뜹니다.
   - **Windows:** SmartScreen 경고에서 "추가 정보 → 실행"을 누릅니다.
-  - **macOS:** Gatekeeper 경고가 뜨면 Finder에서 앱을 우클릭한 뒤 "열기"를 누릅니다.
+  - **macOS:** Gatekeeper가 실행을 막습니다. macOS 15(Sequoia)부터는 Finder에서 우클릭한 뒤 "열기"를 눌러도 열리지 않습니다. 아래 방법 중 하나를 씁니다.
+    - 설치 파일이나 앱을 한 번 열어 경고를 띄운 뒤 닫습니다. 그다음 "시스템 설정 → 개인정보 보호 및 보안" 맨 아래에서 "그래도 열기"를 누릅니다.
+    - 포터블 zip을 쓴다면 압축을 푼 앱의 격리 속성을 지웁니다(`xattr -dr com.apple.quarantine Aragorn.app`). "손상되었기 때문에 열 수 없습니다"라는 경고가 뜰 때도 이렇게 합니다.
 - Linux에서는 AppImage에 실행 권한을 줍니다(`chmod +x Aragorn.AppImage`).
 
 ## 사용법
