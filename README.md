@@ -1,3 +1,5 @@
+<img src="crates/aragorn-desktop/assets/icon/aragorn.png" alt="Aragorn 아이콘" width="128">
+
 # Aragorn
 
 Rust로 만든 게임보이 / 게임보이 컬러 에뮬레이터입니다.
