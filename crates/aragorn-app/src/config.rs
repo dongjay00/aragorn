@@ -8,6 +8,14 @@ use serde::{Deserialize, Serialize};
 pub struct Config {
     pub update: UpdateConfig,
     pub input: InputConfig,
+    pub audio: AudioConfig,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct AudioConfig {
+    /// 음소거. 다음 실행에도 유지한다.
+    pub muted: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -74,6 +82,13 @@ mod tests {
         let c: Config = serde_json::from_str(r#"{"update":{"auto_download":false}}"#).unwrap();
         assert_eq!(c.input, InputConfig::default());
         assert!(!c.update.auto_download);
+    }
+
+    #[test]
+    fn sound_is_on_by_default() {
+        assert!(!Config::default().audio.muted);
+        let c: Config = serde_json::from_str(r#"{"audio":{"muted":true}}"#).unwrap();
+        assert!(c.audio.muted);
     }
 
     #[test]

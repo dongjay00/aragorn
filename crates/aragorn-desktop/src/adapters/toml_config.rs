@@ -103,13 +103,17 @@ mod tests {
 
     #[test]
     fn input_bindings_round_trip_through_toml() {
-        use aragorn_app::{input::Action, pacing::FastForward};
+        use aragorn_app::{
+            input::Action,
+            pacing::{BaseSpeed, FastForward},
+        };
         let dir = tempfile::tempdir().unwrap();
         let store = store_in(dir.path());
         let mut config = Config::default();
         config.input.keyboard.bind(Action::A, "K");
         config.input.gamepad.bind(Action::Pause, "Mode");
         config.input.fast_forward = FastForward::Unlimited;
+        config.input.base_speed = BaseSpeed::X2;
         store.save(&config).unwrap();
         assert_eq!(store.load(), config);
     }

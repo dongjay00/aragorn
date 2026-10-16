@@ -15,8 +15,8 @@ pub const UNLIMITED_BUDGET: Duration = Duration::from_millis(12);
 /// 무제한 배속에서 화면 갱신 한 번에 돌리는 프레임 상한. 시간 확인이 고장 나도 UI를 붙잡지 않는다.
 pub const UNLIMITED_MAX_FRAMES: u32 = 120;
 
-/// 배속 키를 누르고 있는 동안의 속도 (스펙 §5.1: 2×/4×/무제한).
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+/// 배속 키를 누르고 있는 동안의 속도 (스펙 §5.1: 2×/4×/무제한). 빠른 순서로 비교한다.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum FastForward {
     X2,
@@ -56,6 +56,47 @@ impl FastForward {
     }
 }
 
+/// 배속 키를 누르지 않을 때의 기본 속도. 무제한은 CPU를 계속 붙잡으므로 고를 수 없다.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BaseSpeed {
+    #[default]
+    X1,
+    X2,
+    X4,
+}
+
+impl BaseSpeed {
+    pub const ALL: [BaseSpeed; 3] = [BaseSpeed::X1, BaseSpeed::X2, BaseSpeed::X4];
+
+    /// 보통 속도보다 빠르면 그에 해당하는 배속.
+    pub fn fast(self) -> Option<FastForward> {
+        match self {
+            BaseSpeed::X1 => None,
+            BaseSpeed::X2 => Some(FastForward::X2),
+            BaseSpeed::X4 => Some(FastForward::X4),
+        }
+    }
+
+    /// 설정 파일에 쓰는 이름(`x1`, `x2`, `x4`)으로 찾는다.
+    pub fn from_name(name: &str) -> Option<Self> {
+        match name {
+            "x1" => Some(BaseSpeed::X1),
+            "x2" => Some(BaseSpeed::X2),
+            "x4" => Some(BaseSpeed::X4),
+            _ => None,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            BaseSpeed::X1 => "1배",
+            BaseSpeed::X2 => "2배",
+            BaseSpeed::X4 => "4배",
+        }
+    }
+}
+
 /// 이번 화면 갱신에서 에뮬레이션을 어떻게 돌릴지.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RunMode {
@@ -89,14 +130,15 @@ impl SpeedControl {
         self.paused
     }
 
-    /// 일시정지 중에는 배속 키를 눌러도 멈춰 있다.
-    pub fn mode(&self, fast_held: bool, fast_forward: FastForward) -> RunMode {
+    /// 일시정지 중에는 배속 키를 눌러도 멈춰 있다. 배속 키를 누르면 기본 속도와 배속 속도 중
+    /// 빠른 쪽으로 돈다. 누르는 동안 오히려 느려지지 않게 한다.
+    pub fn mode(&self, fast_held: bool, fast_forward: FastForward, base: BaseSpeed) -> RunMode {
         if self.paused {
             RunMode::Paused
         } else if fast_held {
-            RunMode::Fast(fast_forward)
+            RunMode::Fast(base.fast().map_or(fast_forward, |b| b.max(fast_forward)))
         } else {
-            RunMode::Normal
+            base.fast().map_or(RunMode::Normal, RunMode::Fast)
         }
     }
 }
@@ -202,21 +244,76 @@ mod tests {
     #[test]
     fn speed_control_modes() {
         let mut c = SpeedControl::default();
-        assert_eq!(c.mode(false, FastForward::X2), RunMode::Normal);
         assert_eq!(
-            c.mode(true, FastForward::X2),
+            c.mode(false, FastForward::X2, BaseSpeed::X1),
+            RunMode::Normal
+        );
+        assert_eq!(
+            c.mode(true, FastForward::X2, BaseSpeed::X1),
             RunMode::Fast(FastForward::X2)
         );
         c.toggle_pause();
         assert!(c.is_paused());
-        assert_eq!(c.mode(true, FastForward::X2), RunMode::Paused);
+        assert_eq!(
+            c.mode(true, FastForward::X2, BaseSpeed::X1),
+            RunMode::Paused
+        );
         c.toggle_pause();
-        assert_eq!(c.mode(false, FastForward::X2), RunMode::Normal);
+        assert_eq!(
+            c.mode(false, FastForward::X2, BaseSpeed::X1),
+            RunMode::Normal
+        );
         c.pause();
         c.pause();
         assert!(c.is_paused(), "pause는 토글이 아니다");
         c.resume();
         c.resume();
         assert!(!c.is_paused(), "resume도 토글이 아니다");
+    }
+
+    #[test]
+    fn base_speed_sets_mode_without_key() {
+        let c = SpeedControl::default();
+        assert_eq!(BaseSpeed::default(), BaseSpeed::X1);
+        assert_eq!(
+            c.mode(false, FastForward::X4, BaseSpeed::X1),
+            RunMode::Normal
+        );
+        assert_eq!(
+            c.mode(false, FastForward::X4, BaseSpeed::X2),
+            RunMode::Fast(FastForward::X2)
+        );
+    }
+
+    #[test]
+    fn fast_key_never_slows_base_speed() {
+        let c = SpeedControl::default();
+        assert_eq!(
+            c.mode(true, FastForward::X2, BaseSpeed::X4),
+            RunMode::Fast(FastForward::X4)
+        );
+        assert_eq!(
+            c.mode(true, FastForward::Unlimited, BaseSpeed::X2),
+            RunMode::Fast(FastForward::Unlimited)
+        );
+    }
+
+    #[test]
+    fn paused_ignores_base_speed() {
+        let mut c = SpeedControl::default();
+        c.pause();
+        assert_eq!(
+            c.mode(false, FastForward::X4, BaseSpeed::X4),
+            RunMode::Paused
+        );
+    }
+
+    #[test]
+    fn base_speed_names_match_serde() {
+        for b in BaseSpeed::ALL {
+            let name = serde_json::to_value(b).unwrap();
+            assert_eq!(BaseSpeed::from_name(name.as_str().unwrap()), Some(b));
+        }
+        assert_eq!(BaseSpeed::from_name("unlimited"), None);
     }
 }

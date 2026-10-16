@@ -8,7 +8,7 @@ use std::collections::HashSet;
 /// 설정의 키보드 매핑을 egui 키로 바꾼 것.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Keymap {
-    keys: [(Action, Option<Key>); 10],
+    keys: [(Action, Option<Key>); 11],
 }
 
 impl Keymap {
@@ -74,6 +74,7 @@ pub struct InputFrame {
     pub buttons: [(Button, bool); 8],
     pub fast_forward: bool,
     pub pause_pressed: bool,
+    pub mute_pressed: bool,
 }
 
 /// 이번 화면 갱신에 `key`가 새로 눌렸는지. 누르고 있을 때 OS가 보내는 반복 입력은 세지 않는다.
@@ -103,6 +104,8 @@ pub fn gather(
         fast_forward: held(Action::FastForward),
         pause_pressed: keymap.key(Action::Pause).is_some_and(&key_pressed)
             || pad.pressed.contains(&Action::Pause),
+        mute_pressed: keymap.key(Action::Mute).is_some_and(&key_pressed)
+            || pad.pressed.contains(&Action::Mute),
     }
 }
 
@@ -233,5 +236,19 @@ mod tests {
             &PadInput::default(),
         );
         assert!(frame.pause_pressed);
+    }
+
+    #[test]
+    fn mute_toggles_on_press_from_keyboard_or_pad() {
+        let keymap = Keymap::new(&Bindings::keyboard_default());
+        let frame = gather(&keymap, |k| k == Key::M, |_| false, &PadInput::default());
+        assert!(!frame.mute_pressed, "누르고 있는 것만으로는 바꾸지 않는다");
+        let frame = gather(&keymap, |_| false, |k| k == Key::M, &PadInput::default());
+        assert!(frame.mute_pressed);
+        let pad = PadInput {
+            held: vec![Action::Mute],
+            pressed: vec![Action::Mute],
+        };
+        assert!(gather(&keymap, |_| false, |_| false, &pad).mute_pressed);
     }
 }
