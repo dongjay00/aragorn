@@ -1,0 +1,35 @@
+[package]
+name = "aragorn-mobile"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+name = "aragorn_mobile"
+# cdylib: Android(.so), staticlib: iOS(XCFramework), lib: 테스트
+crate-type = ["cdylib", "staticlib", "lib"]
+
+[[bin]]
+name = "uniffi-bindgen"
+path = "src/bin/uniffi-bindgen.rs"
+required-features = ["bindgen"]
+
+[features]
+# Kotlin·Swift 바인딩 생성기. `cargo xtask android`가 켠다.
+bindgen = ["uniffi/cli"]
+
+[dependencies]
+aragorn-app = { path = "../aragorn-app" }
+aragorn-host = { path = "../aragorn-host" }
+gb-core = { path = "../gb-core" }
+log = "0.4"
+thiserror = "2"
+uniffi = "0.32"
+
+[target.'cfg(target_os = "android")'.dependencies]
+android_logger = "0.15"
+jni-sys = "0.4"
+ndk-context = "0.1"
+
+[dev-dependencies]
+tempfile = "3"
