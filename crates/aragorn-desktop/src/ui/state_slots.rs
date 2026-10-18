@@ -1,6 +1,6 @@
 //! 세이브 스테이트 슬롯: F1–F10 저장, Shift+F1–F10 불러오기 (스펙 §6.2), 툴바 "스테이트" 메뉴.
 
-use aragorn_app::session::{STATE_SLOTS, Session, THUMBNAIL_HEIGHT, THUMBNAIL_WIDTH};
+use aragorn_app::session::{STATE_SLOTS, Session, THUMBNAIL_HEIGHT, THUMBNAIL_WIDTH, ago_text};
 use eframe::egui::{self, Event, Key};
 
 /// 스테이트 단축키. 설정에서 게임 버튼에 지정할 수 없다.
@@ -43,17 +43,6 @@ pub fn hotkey(events: &[Event]) -> Option<SlotCommand> {
         }
         _ => None,
     })
-}
-
-/// 저장한 지 얼마나 지났는지.
-pub fn ago_text(now: u64, saved_at: u64) -> String {
-    let secs = now.saturating_sub(saved_at);
-    match secs {
-        0..60 => "방금".to_string(),
-        60..3600 => format!("{}분 전", secs / 60),
-        3600..86_400 => format!("{}시간 전", secs / 3600),
-        _ => format!("{}일 전", secs / 86_400),
-    }
 }
 
 struct SlotEntry {
@@ -197,14 +186,5 @@ mod tests {
         assert_eq!(hotkey(&[key(Key::F11, false, false)]), None);
         assert_eq!(hotkey(&[key(Key::A, false, false)]), None);
         assert_eq!(hotkey(&[key(Key::F2, false, true)]), None);
-    }
-
-    #[test]
-    fn ago_text_uses_largest_unit() {
-        assert_eq!(ago_text(100, 100), "방금");
-        assert_eq!(ago_text(100, 200), "방금", "시계가 거꾸로 가도 방금");
-        assert_eq!(ago_text(1000, 1000 - 5 * 60), "5분 전");
-        assert_eq!(ago_text(100_000, 100_000 - 3 * 3600 - 1), "3시간 전");
-        assert_eq!(ago_text(1_000_000, 1_000_000 - 2 * 86_400), "2일 전");
     }
 }

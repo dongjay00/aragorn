@@ -125,7 +125,7 @@ impl Bindings {
     }
 
     /// 순서: 오른쪽, 왼쪽, 위, 아래, A, B, Select, Start, 배속, 일시정지, 음소거.
-    fn from_names(names: [&str; 11]) -> Self {
+    pub fn from_names(names: [&str; 11]) -> Self {
         let [
             right,
             left,

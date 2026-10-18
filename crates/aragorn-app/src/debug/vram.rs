@@ -161,6 +161,25 @@ impl Sprite {
         u8::from(cgb && self.attr & 0x08 != 0)
     }
 
+    /// 속성을 글로 풀어 쓴다 (예: `팔레트 3 뱅크 1 ↔ BG뒤`, `OBP0 ↕`).
+    pub fn describe(&self, cgb: bool) -> String {
+        let mut parts = vec![if cgb {
+            format!("팔레트 {} 뱅크 {}", self.palette(true), self.bank(true))
+        } else {
+            format!("OBP{}", self.palette(false))
+        }];
+        if self.flip_x() {
+            parts.push("↔".into());
+        }
+        if self.flip_y() {
+            parts.push("↕".into());
+        }
+        if self.behind_bg() {
+            parts.push("BG뒤".into());
+        }
+        parts.join(" ")
+    }
+
     /// 화면 안에 조금이라도 보이는지.
     pub fn on_screen(&self, tall: bool) -> bool {
         let height: u16 = if tall { 16 } else { 8 };
@@ -223,6 +242,20 @@ pub fn palette_word(ram: &[u8; 64], palette: u8, color: u8) -> u16 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sprite_attributes_are_spelled_out() {
+        let s = Sprite {
+            index: 0,
+            y: 16,
+            x: 8,
+            tile: 0,
+            attr: 0x80 | 0x20 | 0x10 | 0x0B,
+        };
+        assert_eq!(s.describe(true), "팔레트 3 뱅크 1 ↔ BG뒤");
+        assert_eq!(s.describe(false), "OBP1 ↔ BG뒤");
+        assert_eq!(Sprite { attr: 0x40, ..s }.describe(false), "OBP0 ↕");
+    }
 
     /// 뱅크 하나 크기의 빈 VRAM에 타일 `index`를 `rows`(2바이트씩 8줄)로 채운다.
     fn vram_with_tile(index: usize, rows: [[u8; 2]; 8]) -> Vec<u8> {

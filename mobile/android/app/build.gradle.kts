@@ -3,6 +3,24 @@ plugins {
     alias(libs.plugins.kotlin.compose)
 }
 
+// 앱 버전은 데스크톱과 같은 워크스페이스 버전(Cargo.toml의 [workspace.package] version)이다.
+// 업데이트 정책도 이 버전으로 판단한다.
+val workspaceVersion: String = rootDir.resolve("../../Cargo.toml").readText()
+    .substringAfter("[workspace.package]")
+    .let { Regex("""version\s*=\s*"([^"]+)"""").find(it)!!.groupValues[1] }
+
+/** 1.2.3 → 10203. 마이너·패치는 99까지 쓴다. */
+fun versionCodeOf(version: String): Int {
+    val (major, minor, patch) = version.substringBefore('-').split('.').map(String::toInt)
+    return major * 10000 + minor * 100 + patch
+}
+
+// 업데이트를 확인할 GitHub 저장소(owner/repo). 데스크톱처럼 릴리스 CI가 ARAGORN_REPO로 넣는다.
+// 없으면 업데이트를 확인하지 않는다. 로컬에서는 -Paragorn.repo=owner/repo로 줄 수 있다.
+val githubRepo: String = providers.environmentVariable("ARAGORN_REPO")
+    .orElse(providers.gradleProperty("aragorn.repo"))
+    .getOrElse("")
+
 android {
     namespace = "io.github.dongjay00.aragorn"
     compileSdk = 37
@@ -14,8 +32,9 @@ android {
         // cpal의 AAudio 출력이 API 26부터 있다. xtask/src/android.rs의 MIN_SDK와 맞춘다.
         minSdk = 26
         targetSdk = 36
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = versionCodeOf(workspaceVersion)
+        versionName = workspaceVersion
+        buildConfigField("String", "GITHUB_REPO", "\"$githubRepo\"")
     }
 
     buildTypes {
@@ -33,6 +52,7 @@ android {
 
     buildFeatures {
         compose = true
+        buildConfig = true
     }
 
     sourceSets {
