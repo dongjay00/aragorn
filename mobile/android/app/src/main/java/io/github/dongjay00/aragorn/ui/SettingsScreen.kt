@@ -130,6 +130,14 @@ fun SettingsScreen(viewModel: GameViewModel, onBack: () -> Unit) {
                     Switch(checked = muted, onCheckedChange = viewModel::setMuted)
                 }
 
+                Section("세이브")
+                Text(
+                    "파일 앱의 \"Aragorn\" 항목에 데스크톱과 같은 형식(.sav, .ss0–.ss9)으로 저장합니다. " +
+                        "데스크톱의 세이브를 ROM 파일 이름에 맞춰 넣으면 이어서 할 수 있습니다. " +
+                        "실행 중인 게임의 세이브를 바꾸면 게임을 닫습니다.",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+
                 Section("업데이트")
                 Text("현재 버전 ${appVersion()}")
                 Text(updateText(update, viewModel.updateEnabled), style = MaterialTheme.typography.bodySmall)
