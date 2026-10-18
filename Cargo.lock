@@ -348,6 +348,8 @@ dependencies = [
  "jni-sys 0.4.1",
  "log",
  "ndk-context",
+ "semver",
+ "serde_json",
  "tempfile",
  "thiserror 2.0.21",
  "uniffi",

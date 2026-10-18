@@ -58,6 +58,17 @@ pub struct SlotInfo {
     pub thumbnail: Option<Vec<u32>>,
 }
 
+/// 저장한 지 얼마나 지났는지.
+pub fn ago_text(now: u64, saved_at: u64) -> String {
+    let secs = now.saturating_sub(saved_at);
+    match secs {
+        0..60 => "방금".to_string(),
+        60..3600 => format!("{}분 전", secs / 60),
+        3600..86_400 => format!("{}시간 전", secs / 3600),
+        _ => format!("{}일 전", secs / 86_400),
+    }
+}
+
 /// 현재 시각 (포트). MBC3 RTC 세이브의 저장 시각과 앱이 꺼져 있던 시간 계산에 쓴다.
 pub trait Clock {
     /// 유닉스 시각(초).
@@ -403,6 +414,15 @@ impl Session {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ago_text_uses_largest_unit() {
+        assert_eq!(ago_text(100, 100), "방금");
+        assert_eq!(ago_text(100, 200), "방금", "시계가 거꾸로 가도 방금");
+        assert_eq!(ago_text(1000, 1000 - 5 * 60), "5분 전");
+        assert_eq!(ago_text(100_000, 100_000 - 3 * 3600 - 1), "3시간 전");
+        assert_eq!(ago_text(1_000_000, 1_000_000 - 2 * 86_400), "2일 전");
+    }
     use crate::pacing::FRAME_DURATION;
     use std::{
         cell::{Cell, RefCell},

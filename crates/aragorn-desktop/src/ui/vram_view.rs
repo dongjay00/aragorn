@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 
-use aragorn_app::debug::vram::{self, MapSource, Sprite};
+use aragorn_app::debug::vram::{self, MapSource};
 use eframe::egui;
 use gb_core::{DebugView, PaletteKind};
 
@@ -187,7 +187,7 @@ impl VramView {
                 ui.label(mono(format!("{:3}", i16::from(sprite.x) - 8)));
                 ui.label(mono(format!("{:3}", i16::from(sprite.y) - 16)));
                 ui.label(mono(format!("${:02X}", sprite.tile)));
-                ui.label(mono(attributes(sprite, cgb)));
+                ui.label(mono(sprite.describe(cgb)));
                 ui.end_row();
             }
         });
@@ -195,24 +195,6 @@ impl VramView {
 }
 
 /// 속성 바이트 풀이: `팔레트 3 뱅크 1 ↔ ↕ BG뒤`
-fn attributes(sprite: &Sprite, cgb: bool) -> String {
-    let mut parts = vec![if cgb {
-        format!("팔레트 {} 뱅크 {}", sprite.palette(true), sprite.bank(true))
-    } else {
-        format!("OBP{}", sprite.palette(false))
-    }];
-    if sprite.flip_x() {
-        parts.push("↔".into());
-    }
-    if sprite.flip_y() {
-        parts.push("↕".into());
-    }
-    if sprite.behind_bg() {
-        parts.push("BG뒤".into());
-    }
-    parts.join(" ")
-}
-
 fn swatch(ui: &mut egui::Ui, rgba: u32, hover: String) {
     let [r, g, b, _] = rgba.to_be_bytes();
     let (rect, response) = ui.allocate_exact_size(egui::vec2(20.0, 20.0), egui::Sense::hover());
@@ -271,19 +253,5 @@ mod tests {
         assert_eq!(tile_at(egui::vec2(256.0, 0.0), 2.0), None);
         assert_eq!(tile_at(egui::vec2(0.0, 384.0), 2.0), None);
         assert_eq!(tile_at(egui::vec2(-1.0, 0.0), 2.0), None);
-    }
-
-    #[test]
-    fn sprite_attributes_are_spelled_out() {
-        let s = Sprite {
-            index: 0,
-            y: 16,
-            x: 8,
-            tile: 0,
-            attr: 0x80 | 0x20 | 0x10 | 0x0B,
-        };
-        assert_eq!(attributes(&s, true), "팔레트 3 뱅크 1 ↔ BG뒤");
-        assert_eq!(attributes(&s, false), "OBP1 ↔ BG뒤");
-        assert_eq!(attributes(&Sprite { attr: 0x40, ..s }, false), "OBP0 ↕");
     }
 }
