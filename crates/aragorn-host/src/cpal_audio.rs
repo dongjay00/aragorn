@@ -1,7 +1,7 @@
 //! cpal 오디오 출력 (`AudioSink` 어댑터). 장치가 없으면 소리 없이 실행하고(스펙 §6.1),
 //! 쓰던 장치가 끊기면(헤드폰 분리, 기본 장치 변경) 잠시 뒤 기본 장치를 다시 연다.
 
-use super::sample_queue::SampleQueue;
+use crate::sample_queue::SampleQueue;
 use aragorn_app::audio::{AudioSink, target_frames};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{ErrorKind, FromSample, SampleFormat, SizedSample};
