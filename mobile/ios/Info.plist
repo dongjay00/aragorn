@@ -5,6 +5,9 @@
 	<!-- 업데이트를 확인할 GitHub 저장소(owner/repo). 데스크톱·Android처럼 릴리스 빌드가 ARAGORN_REPO로 넣는다. -->
 	<key>AragornRepo</key>
 	<string>$(ARAGORN_REPO)</string>
+	<!-- 파일 앱의 "나의 iPhone › Aragorn"에 Documents(세이브)를 보인다. INFOPLIST_KEY_로는 넣을 수 없는 키다. -->
+	<key>UIFileSharingEnabled</key>
+	<true/>
 	<key>ITSAppUsesNonExemptEncryption</key>
 	<false/>
 </dict>

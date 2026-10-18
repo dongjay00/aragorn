@@ -75,27 +75,30 @@ pub fn collect_package_hashes(feeds_dir: &Path, version: &str) -> Result<Package
     Ok(hashes)
 }
 
-/// Android 패키지의 정책 채널 이름 (앱의 `ANDROID_CHANNEL`과 같다).
-pub const ANDROID_CHANNEL: &str = "android";
-
-/// 릴리스에 올릴 APK 파일 이름.
-pub fn apk_name(version: &str) -> String {
-    format!("Aragorn-{version}.apk")
+/// 모바일 패키지: (정책 채널 이름, 릴리스 파일 이름). 채널 이름은 앱의 `PACKAGE_CHANNEL`과 같다.
+/// 모바일 앱은 정책에 자기 채널이 있을 때만 새 버전을 알린다.
+pub fn mobile_packages(version: &str) -> [(&'static str, String); 2] {
+    [
+        ("android", format!("Aragorn-{version}.apk")),
+        ("ios", format!("Aragorn-{version}.ipa")),
+    ]
 }
 
-/// `dir`의 `Aragorn-{version}.apk` SHA256을 `android` 채널로 넣는다.
-/// Android 앱은 정책에 이 채널이 있을 때만 새 버전을 알리므로, APK가 없으면 오류다.
-pub fn add_android_hash(
+/// `dir`의 모바일 패키지(APK, IPA) SHA256을 각 채널로 넣는다. 파일이 없으면 오류다.
+pub fn add_mobile_hashes(
     hashes: &mut PackageHashes,
     dir: &Path,
     version: &str,
 ) -> Result<(), String> {
-    let name = apk_name(version);
-    let data =
-        fs::read(dir.join(&name)).map_err(|e| format!("{name}을(를) 읽을 수 없습니다: {e}"))?;
-    let digest = Sha256::digest(&data);
-    let hex: String = digest.iter().map(|b| format!("{b:02x}")).collect();
-    hashes.insert(ANDROID_CHANNEL.to_string(), hex);
+    for (channel, name) in mobile_packages(version) {
+        let data =
+            fs::read(dir.join(&name)).map_err(|e| format!("{name}을(를) 읽을 수 없습니다: {e}"))?;
+        let hex: String = Sha256::digest(&data)
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect();
+        hashes.insert(channel.to_string(), hex);
+    }
     Ok(())
 }
 
@@ -201,24 +204,29 @@ mod tests {
     }
 
     #[test]
-    fn adds_android_apk_hash() {
+    fn adds_mobile_package_hashes() {
         let dir = tempfile::tempdir().unwrap();
         fs::write(dir.path().join("Aragorn-0.2.0.apk"), b"abc").unwrap();
+        fs::write(dir.path().join("Aragorn-0.2.0.ipa"), b"").unwrap();
         let mut found = hashes();
-        add_android_hash(&mut found, dir.path(), "0.2.0").unwrap();
-        // SHA256("abc")
+        add_mobile_hashes(&mut found, dir.path(), "0.2.0").unwrap();
+        // SHA256("abc"), SHA256("")
         assert_eq!(
-            found[ANDROID_CHANNEL],
+            found["android"],
             "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
+        assert_eq!(
+            found["ios"],
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
         );
         assert_eq!(found["win"], HASH);
     }
 
     #[test]
-    fn missing_apk_is_an_error() {
+    fn missing_mobile_package_is_an_error() {
         let dir = tempfile::tempdir().unwrap();
-        fs::write(dir.path().join("Aragorn-0.1.0.apk"), b"old").unwrap();
-        assert!(add_android_hash(&mut hashes(), dir.path(), "0.2.0").is_err());
+        fs::write(dir.path().join("Aragorn-0.2.0.apk"), b"apk").unwrap();
+        assert!(add_mobile_hashes(&mut hashes(), dir.path(), "0.2.0").is_err());
     }
 
     #[test]

@@ -5,7 +5,7 @@ mod policy;
 
 use aragorn_app::update::{sign_policy, verify_and_parse};
 use policy::{
-    PolicyToml, add_android_hash, build_policy_json, check_tag, collect_package_hashes,
+    PolicyToml, add_mobile_hashes, build_policy_json, check_tag, collect_package_hashes,
     decode_secret,
 };
 use std::{
@@ -64,7 +64,7 @@ fn make_policy(out_dir: Option<&str>, feeds_dir: Option<&str>) -> Result<(), Str
     let text = fs::read_to_string(root().join("release/policy.toml")).map_err(|e| e.to_string())?;
     let policy: PolicyToml = toml::from_str(&text).map_err(|e| e.to_string())?;
     let mut packages = collect_package_hashes(&feeds, VERSION)?;
-    add_android_hash(&mut packages, &feeds, VERSION)?;
+    add_mobile_hashes(&mut packages, &feeds, VERSION)?;
     let json = build_policy_json(VERSION, &policy, &packages)?;
 
     let secret_b64 = env::var("ARAGORN_POLICY_SIGNING_KEY")

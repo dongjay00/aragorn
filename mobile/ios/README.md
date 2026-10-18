@@ -39,7 +39,7 @@ xcodebuild -project Aragorn.xcodeproj -scheme Aragorn -destination 'platform=iOS
 - 키보드·게임패드 키 설정 (GameController 프레임워크). 키보드 이름은 `UP`, `X`, `RETURN`처럼 쓰고,
   게임패드는 Android와 같은 이름(`DPAD_UP`, `BUTTON_A`)을 쓴다.
 - 디버거: CPU, 메모리, VRAM, I/O
-- 업데이트 확인: 정책에 `ios` 패키지가 있을 때만 알린다. 지금은 iOS 패키지를 배포하지 않는다.
+- 업데이트 확인: 정책에 `ios` 패키지가 있을 때만 알리고, 릴리스 페이지로 안내한다.
 
 ## 세이브
 
@@ -48,5 +48,6 @@ xcodebuild -project Aragorn.xcodeproj -scheme Aragorn -destination 'platform=iOS
 
 ## 배포
 
-아직 배포하지 않는다. iPhone에 설치하려면 Xcode로 직접 빌드한다 (무료 Apple ID는 7일마다 다시 설치해야 한다).
+데스크톱·Android와 같은 `v<버전>` 태그로 함께 나간다. 릴리스 CI가 서명하지 않은 `Aragorn-<버전>.ipa`를 만들고,
+업데이트 정책에 IPA의 SHA256을 `ios` 채널로 넣는다. 사용자는 AltStore·SideStore로 자기 Apple ID로 서명해 설치한다.
 TestFlight·App Store 배포에는 Apple Developer Program(연 $99) 가입이 필요하다.
