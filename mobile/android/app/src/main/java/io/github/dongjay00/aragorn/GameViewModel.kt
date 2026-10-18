@@ -141,11 +141,30 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
                     _emulator.value?.close()
                     configure(emulator)
                     _emulator.value = emulator
+                    watchSaveFiles(emulator, name)
                     // 헤더에 제목이 없는 ROM(테스트 ROM 등)은 파일 이름을 보인다.
                     _notice.value = "${emulator.title().ifBlank { name }} 실행 중"
                     refreshSlots()
                 }
                 .onFailure { _notice.value = it.userMessage ?: "ROM을 열 수 없습니다" }
+        }
+    }
+
+    /**
+     * 파일 앱에서 이 게임의 세이브를 바꾸려 하면 게임을 닫는다 ([SavesProvider]).
+     * 닫을 때 지금 진행을 저장하므로, 그 뒤에 들어온 세이브가 덮어써지지 않는다.
+     */
+    private fun watchSaveFiles(emulator: Emulator, saveFileName: String) {
+        RunningGame.set(saveFileName) {
+            // 파일 앱의 스레드에서 불린다. 세이브를 저장하고 스레드를 끝낸 뒤에 돌아가야 한다.
+            emulator.stop()
+            viewModelScope.launch {
+                if (_emulator.value === emulator) {
+                    _emulator.value = null
+                    emulator.close()
+                    _notice.value = "파일 앱에서 세이브를 바꿔 게임을 닫았습니다. ROM을 다시 열어 주세요"
+                }
+            }
         }
     }
 
@@ -415,6 +434,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     override fun onCleared() {
+        RunningGame.set(null, null)
         _emulator.value?.close()
         _emulator.value = null
         settings.close()

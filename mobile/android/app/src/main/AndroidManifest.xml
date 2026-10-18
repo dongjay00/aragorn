@@ -18,6 +18,18 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!-- 세이브 폴더를 시스템 파일 앱과 파일 선택기에 보인다 (데스크톱과 세이브 주고받기). -->
+        <provider
+            android:name=".SavesProvider"
+            android:authorities="${applicationId}.saves"
+            android:exported="true"
+            android:grantUriPermissions="true"
+            android:permission="android.permission.MANAGE_DOCUMENTS">
+            <intent-filter>
+                <action android:name="android.content.action.DOCUMENTS_PROVIDER" />
+            </intent-filter>
+        </provider>
     </application>
 
 </manifest>
