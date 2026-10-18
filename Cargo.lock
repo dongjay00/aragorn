@@ -4655,6 +4655,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "uniffi-bindgen"
+version = "0.11.1"
+dependencies = [
+ "uniffi",
+]
+
+[[package]]
 name = "uniffi_bindgen"
 version = "0.32.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5791,6 +5798,7 @@ dependencies = [
  "getrandom 0.3.4",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
  "tempfile",
  "toml 0.8.23",
 ]

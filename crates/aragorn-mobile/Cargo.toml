@@ -9,15 +9,6 @@ name = "aragorn_mobile"
 # cdylib: Android(.so), staticlib: iOS(XCFramework), lib: 테스트
 crate-type = ["cdylib", "staticlib", "lib"]
 
-[[bin]]
-name = "uniffi-bindgen"
-path = "src/bin/uniffi-bindgen.rs"
-required-features = ["bindgen"]
-
-[features]
-# Kotlin·Swift 바인딩 생성기. `cargo xtask android`가 켠다.
-bindgen = ["uniffi/cli"]
-
 [dependencies]
 aragorn-app = { path = "../aragorn-app" }
 aragorn-host = { path = "../aragorn-host" }

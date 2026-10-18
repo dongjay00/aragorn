@@ -48,3 +48,24 @@ Rust 쪽만 다시 만들 때: `cargo xtask android [--release] [--abi=arm64-v8a
 
 ROM은 문서 선택기로 고르고, 세이브는 앱 전용 폴더 `files/saves/<ROM 파일 이름>`에 데스크톱과 같은 형식으로 둔다
 (`.sav`, `.ss0`–`.ss9`). 앱이 백그라운드로 가면 일시정지하고 게임 세이브를 저장한다.
+
+## 릴리스
+
+데스크톱과 같은 `v<버전>` 태그 하나로 함께 나간다. 릴리스 CI(`.github/workflows/release.yml`)가 다음을 한다.
+
+1. 서명된 릴리스 APK를 `Aragorn-<버전>.apk`로 빌드한다 (arm64-v8a, x86_64).
+2. 업데이트 정책에 APK의 SHA256을 `android` 채널로 넣는다. Android 앱은 이 채널이 있을 때만 새 버전을 알린다.
+
+릴리스 서명 키는 GitHub 시크릿 네 개로 넣는다.
+
+| 시크릿 | 내용 |
+|---|---|
+| `ARAGORN_ANDROID_KEYSTORE_BASE64` | 키스토어(`.jks`) 파일을 base64로 바꾼 것 |
+| `ARAGORN_ANDROID_KEYSTORE_PASSWORD` | 키스토어 비밀번호 |
+| `ARAGORN_ANDROID_KEY_ALIAS` | 키 별칭 |
+| `ARAGORN_ANDROID_KEY_PASSWORD` | 키 비밀번호 |
+
+**키스토어를 잃어버리면 기존 사용자에게 업데이트를 줄 수 없다.** 같은 키로 서명한 APK만 기존 앱 위에 설치되기 때문이다.
+키스토어와 비밀번호는 저장소 밖 안전한 곳에 백업해 둔다. 키가 없으면 릴리스 CI가 멈춘다.
+
+로컬에서 릴리스 APK를 만들 때도 같은 환경 변수(`ARAGORN_ANDROID_KEYSTORE`에는 파일 경로)를 쓴다. 없으면 디버그 키로 서명한다.

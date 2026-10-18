@@ -35,13 +35,32 @@ android {
         versionCode = versionCodeOf(workspaceVersion)
         versionName = workspaceVersion
         buildConfigField("String", "GITHUB_REPO", "\"$githubRepo\"")
+        ndk {
+            // Rust 라이브러리를 빌드하는 ABI만 넣는다 (xtask/src/android.rs의 DEFAULT_ABIS).
+            // JNA는 32비트 ABI도 싣고 오는데, 그대로 두면 32비트 기기에 설치된 뒤 Rust 라이브러리가 없어 꺼진다.
+            abiFilters += listOf("arm64-v8a", "x86_64")
+        }
+    }
+
+    // 릴리스 서명 키. 릴리스 CI가 GitHub 시크릿으로 넣는다. 같은 키로 서명한 APK만 기존 앱 위에
+    // 설치되므로 키를 잃어버리면 사용자가 앱을 지우고 다시 깔아야 한다.
+    // 키가 없으면(로컬 빌드) 디버그 키로 서명한다.
+    val keystore = providers.environmentVariable("ARAGORN_ANDROID_KEYSTORE").orNull
+    signingConfigs {
+        if (keystore != null) {
+            create("release") {
+                storeFile = file(keystore)
+                storePassword = providers.environmentVariable("ARAGORN_ANDROID_KEYSTORE_PASSWORD").get()
+                keyAlias = providers.environmentVariable("ARAGORN_ANDROID_KEY_ALIAS").get()
+                keyPassword = providers.environmentVariable("ARAGORN_ANDROID_KEY_PASSWORD").get()
+            }
+        }
     }
 
     buildTypes {
         release {
             isMinifyEnabled = false
-            // 아직 릴리스 키가 없어 디버그 키로 서명한다. 배포 전에 바꾼다.
-            signingConfig = signingConfigs.getByName("debug")
+            signingConfig = signingConfigs.findByName("release") ?: signingConfigs.getByName("debug")
         }
     }
 

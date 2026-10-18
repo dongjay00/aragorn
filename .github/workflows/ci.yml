@@ -29,3 +29,27 @@ jobs:
       - run: cargo test --workspace
         env:
           ARAGORN_REQUIRE_TEST_ROMS: "1"
+
+  android:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android, x86_64-linux-android
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - name: Android SDK 구성 요소 (app/build.gradle.kts의 ndkVersion, compileSdk와 같다)
+        shell: bash
+        run: |
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install \
+            "ndk;29.0.14206865" "platforms;android-37.0" < <(yes) > /dev/null
+      - name: cargo-ndk 설치
+        run: cargo install cargo-ndk --locked
+      # preBuild가 cargo xtask android로 Rust 라이브러리와 Kotlin 바인딩을 먼저 만든다.
+      - name: APK 빌드
+        working-directory: mobile/android
+        run: ./gradlew assembleDebug --no-daemon
