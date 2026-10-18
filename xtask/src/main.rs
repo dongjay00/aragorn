@@ -1,4 +1,5 @@
 mod android;
+mod ios;
 mod keys;
 mod policy;
 
@@ -14,7 +15,7 @@ use std::{
 };
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
-const USAGE: &str = "사용법: cargo xtask <gen-key <secret-out> | make-policy <out-dir> | check-tag <tag> | android [--release] [--abi=<abi>...]>";
+const USAGE: &str = "사용법: cargo xtask <gen-key <secret-out> | make-policy <out-dir> | check-tag <tag> | android [--release] [--abi=<abi>...] | ios [--release] [--platform=<iphoneos|iphonesimulator>]>";
 
 fn main() -> ExitCode {
     let args: Vec<String> = env::args().skip(1).collect();
@@ -23,6 +24,7 @@ fn main() -> ExitCode {
         Some("gen-key") => gen_key(arg, args.iter().any(|a| a == "--rotate")),
         Some("make-policy") => make_policy(arg, args.get(2).map(String::as_str)),
         Some("android") => android::build(&root(), &args[1..]),
+        Some("ios") => ios::build(&root(), &args[1..], VERSION),
         Some("check-tag") => arg
             .ok_or_else(|| USAGE.to_string())
             .and_then(|tag| check_tag(tag, VERSION)),

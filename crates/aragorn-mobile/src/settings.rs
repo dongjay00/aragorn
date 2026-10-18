@@ -1,8 +1,10 @@
 //! 앱 설정: 키·게임패드 매핑, 속도, 음소거, 건너뛴 업데이트 버전. 데스크톱과 같은 `Config`를
 //! JSON 파일 하나로 저장하고, 바꿀 때마다 바로 쓴다.
 //!
-//! 키 이름은 Android `KeyEvent.keyCodeToString`에서 `KEYCODE_`를 뗀 것이다 (`DPAD_UP`, `BUTTON_A`).
-//! 데스크톱(egui·gilrs 이름)과 이름이 달라 기본값도 따로 둔다.
+//! 키 이름은 플랫폼마다 다르다. 데스크톱(egui·gilrs 이름)과도 달라 기본값을 플랫폼마다 둔다.
+//! - Android 키보드·게임패드: `KeyEvent.keyCodeToString`에서 `KEYCODE_`를 뗀 것 (`DPAD_UP`, `BUTTON_A`)
+//! - iOS 키보드: 앱이 `GCKeyCode`에 붙인 이름 (`UP`, `X`, `RETURN`)
+//! - iOS 게임패드: Android와 같은 이름을 쓴다 (앱이 GameController 버튼을 이 이름으로 바꾼다)
 
 use crate::{
     EmulatorError,
@@ -21,6 +23,20 @@ use std::{
 
 /// 키보드 기본값. 데스크톱 기본 키(방향키, X, Z, Backspace, Enter, Tab, Esc, M)와 같은 키다.
 pub fn keyboard_default() -> Bindings {
+    if cfg!(target_os = "ios") {
+        keyboard_default_ios()
+    } else {
+        keyboard_default_android()
+    }
+}
+
+fn keyboard_default_ios() -> Bindings {
+    Bindings::from_names([
+        "RIGHT", "LEFT", "UP", "DOWN", "X", "Z", "DELETE", "RETURN", "TAB", "ESCAPE", "M",
+    ])
+}
+
+fn keyboard_default_android() -> Bindings {
     Bindings::from_names([
         "DPAD_RIGHT",
         "DPAD_LEFT",
@@ -36,7 +52,7 @@ pub fn keyboard_default() -> Bindings {
     ])
 }
 
-/// 게임패드 기본값. 데스크톱처럼 아래 버튼이 A, 오른쪽 버튼이 B, 오른쪽 트리거가 배속이다.
+/// 게임패드 기본값 (Android와 iOS가 같다). 데스크톱처럼 아래 버튼이 A, 오른쪽 버튼이 B, 오른쪽 트리거가 배속이다.
 pub fn gamepad_default() -> Bindings {
     Bindings::from_names([
         "DPAD_RIGHT",
@@ -206,6 +222,7 @@ fn write_atomic(path: &Path, data: &[u8]) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use aragorn_app::input::Action;
 
     fn open(dir: &tempfile::TempDir) -> Arc<Settings> {
         Settings::open(
@@ -214,6 +231,16 @@ mod tests {
                 .to_string_lossy()
                 .into_owned(),
         )
+    }
+
+    #[test]
+    fn ios_keyboard_uses_the_same_keys_as_desktop() {
+        let ios = keyboard_default_ios();
+        let desktop = Bindings::keyboard_default();
+        assert_eq!(ios.get(Action::A), "X");
+        assert_eq!(ios.get(Action::Start), "RETURN");
+        assert_eq!(desktop.get(Action::Start), "Enter");
+        assert_eq!(ios.get(Action::Mute), desktop.get(Action::Mute));
     }
 
     #[test]
