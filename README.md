@@ -5,7 +5,7 @@
 Rust로 만든 게임보이 / 게임보이 컬러 에뮬레이터입니다.
 
 - **목표:** 포켓몬 레드·블루·옐로·골드·실버·크리스탈을 끝까지 즐길 수 있게 하는 것
-- **지원 OS:** Windows, macOS, Linux
+- **지원 OS:** Windows, macOS, Linux, Android
 - **자동 업데이트:** GitHub Releases에서 서명된 업데이트를 받습니다.
 
 > ROM은 들어 있지 않습니다. 직접 가지고 있는 카트리지에서 추출한 ROM을 사용해 주세요.
@@ -42,6 +42,7 @@ Rust로 만든 게임보이 / 게임보이 컬러 에뮬레이터입니다.
 | Windows | `Aragorn-win-Setup.exe` | `Aragorn-win-Portable.zip` |
 | macOS | `Aragorn-osx-Setup.pkg` | `Aragorn-osx-Portable.zip` |
 | Linux | `Aragorn.AppImage` | — |
+| Android (8.0 이상, 64비트) | `Aragorn-<버전>.apk` | — |
 
 - 아직 코드 서명을 하지 않았습니다. 그래서 처음 실행할 때 경고가 뜹니다.
   - **Windows:** SmartScreen 경고에서 "추가 정보 → 실행"을 누릅니다.
@@ -49,6 +50,9 @@ Rust로 만든 게임보이 / 게임보이 컬러 에뮬레이터입니다.
     - 설치 파일이나 앱을 한 번 열어 경고를 띄운 뒤 닫습니다. 그다음 "시스템 설정 → 개인정보 보호 및 보안" 맨 아래에서 "그래도 열기"를 누릅니다.
     - 포터블 zip을 쓴다면 압축을 푼 앱의 격리 속성을 지웁니다(`xattr -dr com.apple.quarantine Aragorn.app`). "손상되었기 때문에 열 수 없습니다"라는 경고가 뜰 때도 이렇게 합니다.
 - Linux에서는 AppImage에 실행 권한을 줍니다(`chmod +x Aragorn.AppImage`).
+- Android에서는 APK를 받아 엽니다. 처음에는 브라우저(또는 파일 앱)에 "출처를 알 수 없는 앱 설치"를 허용해야 합니다.
+  - 새 버전이 나오면 앱이 알려 주고 릴리스 페이지를 엽니다. 받은 APK를 열면 기존 앱 위에 설치되고 세이브도 그대로입니다.
+  - ROM은 앱의 "ROM"에서 고릅니다. 세이브는 앱 전용 폴더에 데스크톱과 같은 형식(`.sav`, `.ss0`–`.ss9`)으로 저장합니다.
 
 ## 사용법
 

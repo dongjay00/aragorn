@@ -1,6 +1,7 @@
 use aragorn_app::update::{PackageHashes, parse_policy};
 use base64::{Engine, engine::general_purpose::STANDARD as B64};
 use serde::Deserialize;
+use sha2::{Digest, Sha256};
 use std::{fs, path::Path};
 
 #[derive(Debug, Deserialize)]
@@ -72,6 +73,30 @@ pub fn collect_package_hashes(feeds_dir: &Path, version: &str) -> Result<Package
         hashes.insert(channel.to_string(), asset.sha256.to_ascii_lowercase());
     }
     Ok(hashes)
+}
+
+/// Android 패키지의 정책 채널 이름 (앱의 `ANDROID_CHANNEL`과 같다).
+pub const ANDROID_CHANNEL: &str = "android";
+
+/// 릴리스에 올릴 APK 파일 이름.
+pub fn apk_name(version: &str) -> String {
+    format!("Aragorn-{version}.apk")
+}
+
+/// `dir`의 `Aragorn-{version}.apk` SHA256을 `android` 채널로 넣는다.
+/// Android 앱은 정책에 이 채널이 있을 때만 새 버전을 알리므로, APK가 없으면 오류다.
+pub fn add_android_hash(
+    hashes: &mut PackageHashes,
+    dir: &Path,
+    version: &str,
+) -> Result<(), String> {
+    let name = apk_name(version);
+    let data =
+        fs::read(dir.join(&name)).map_err(|e| format!("{name}을(를) 읽을 수 없습니다: {e}"))?;
+    let digest = Sha256::digest(&data);
+    let hex: String = digest.iter().map(|b| format!("{b:02x}")).collect();
+    hashes.insert(ANDROID_CHANNEL.to_string(), hex);
+    Ok(())
 }
 
 pub fn check_tag(tag: &str, version: &str) -> Result<(), String> {
@@ -173,6 +198,27 @@ mod tests {
         )
         .unwrap();
         assert!(collect_package_hashes(dir.path(), "0.2.0").is_err());
+    }
+
+    #[test]
+    fn adds_android_apk_hash() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("Aragorn-0.2.0.apk"), b"abc").unwrap();
+        let mut found = hashes();
+        add_android_hash(&mut found, dir.path(), "0.2.0").unwrap();
+        // SHA256("abc")
+        assert_eq!(
+            found[ANDROID_CHANNEL],
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
+        assert_eq!(found["win"], HASH);
+    }
+
+    #[test]
+    fn missing_apk_is_an_error() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("Aragorn-0.1.0.apk"), b"old").unwrap();
+        assert!(add_android_hash(&mut hashes(), dir.path(), "0.2.0").is_err());
     }
 
     #[test]
