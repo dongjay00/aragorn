@@ -1,0 +1,11 @@
+[package]
+name = "uniffi-bindgen"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+# UniFFI 바인딩 생성기 (`cargo xtask android`가 부른다). 바인딩은 빌드한 .so에 든 메타데이터에서 만들므로
+# aragorn-mobile에 의존하지 않는다. 의존하면 호스트용으로 오디오 라이브러리(ALSA)까지 빌드해야 한다.
+[dependencies]
+uniffi = { version = "0.32", features = ["cli"] }
