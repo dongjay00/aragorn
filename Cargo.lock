@@ -296,7 +296,7 @@ checksum = "330a5ed07fa54e4702c9d6c4174f74427fc0ef6e214bbd677ae50a5099946470"
 
 [[package]]
 name = "aragorn-app"
-version = "0.12.0"
+version = "0.13.0"
 dependencies = [
  "ed25519-dalek",
  "gb-core",
@@ -308,7 +308,7 @@ dependencies = [
 
 [[package]]
 name = "aragorn-desktop"
-version = "0.12.0"
+version = "0.13.0"
 dependencies = [
  "aragorn-app",
  "aragorn-host",
@@ -329,7 +329,7 @@ dependencies = [
 
 [[package]]
 name = "aragorn-host"
-version = "0.12.0"
+version = "0.13.0"
 dependencies = [
  "aragorn-app",
  "cpal",
@@ -339,7 +339,7 @@ dependencies = [
 
 [[package]]
 name = "aragorn-mobile"
-version = "0.12.0"
+version = "0.13.0"
 dependencies = [
  "android_logger",
  "aragorn-app",
@@ -1883,7 +1883,7 @@ dependencies = [
 
 [[package]]
 name = "gb-core"
-version = "0.12.0"
+version = "0.13.0"
 dependencies = [
  "png 0.17.16",
  "rmp-serde",
@@ -3853,9 +3853,9 @@ dependencies = [
 
 [[package]]
 name = "rustls"
-version = "0.23.45"
+version = "0.23.46"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0d41d731c7d2f962d1ccc364cec258de3c0e93b38c2fb3ba97ac74513048d634"
+checksum = "48e13bd8c0e9365c43cfa5c9e8f9ad49d3c8444926c9aac819e0e4dc503c8fdf"
 dependencies = [
  "log",
  "once_cell",
@@ -4329,7 +4329,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.4.3",
+ "getrandom 0.3.4",
  "once_cell",
  "rustix 1.1.5",
  "windows-sys 0.61.2",
@@ -4656,7 +4656,7 @@ dependencies = [
 
 [[package]]
 name = "uniffi-bindgen"
-version = "0.12.0"
+version = "0.13.0"
 dependencies = [
  "uniffi",
 ]
@@ -5791,7 +5791,7 @@ checksum = "e450f9b2ed1dff33c94c12589a87338689467b9c4f5d8a5710bd09a847d2c8a7"
 
 [[package]]
 name = "xtask"
-version = "0.12.0"
+version = "0.13.0"
 dependencies = [
  "aragorn-app",
  "base64 0.22.1",

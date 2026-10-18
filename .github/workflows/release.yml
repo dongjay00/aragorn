@@ -4,8 +4,9 @@ on:
   push:
     tags: ["v*.*.*"]
 
+# 릴리스를 만드는 publish 잡만 쓰기 권한을 받는다.
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   prepare:
@@ -132,9 +133,46 @@ jobs:
           path: apk/*
           if-no-files-found: error
 
+  ios:
+    needs: prepare
+    runs-on: macos-latest
+    env:
+      VERSION: ${{ needs.prepare.outputs.version }}
+      # Info.plist의 AragornRepo($(ARAGORN_REPO))가 이 값을 받아 업데이트를 확인한다.
+      ARAGORN_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-ios
+      - uses: Swatinem/rust-cache@v2
+      # Xcode는 빌드를 시작할 때 폴더 안 파일 목록을 정하므로 Swift 바인딩을 먼저 만든다.
+      - name: Rust 라이브러리와 Swift 바인딩
+        run: cargo xtask ios --platform=iphoneos --release
+      # 서명하지 않은 IPA. 사용자가 AltStore·SideStore로 자기 Apple ID로 서명해 설치한다.
+      - name: 앱 빌드 (서명하지 않음)
+        working-directory: mobile/ios
+        run: |
+          xcodebuild -project Aragorn.xcodeproj -scheme Aragorn -configuration Release \
+            -destination 'generic/platform=iOS' -derivedDataPath DerivedData build \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO
+      # 파일 이름은 xtask의 ipa_name과 같아야 정책에 ios 패키지로 들어간다.
+      - name: IPA 묶기
+        run: |
+          mkdir -p ipa/Payload out
+          cp -R mobile/ios/DerivedData/Build/Products/Release-iphoneos/Aragorn.app ipa/Payload/
+          (cd ipa && zip -qry "../out/Aragorn-${VERSION}.ipa" Payload)
+      - uses: actions/upload-artifact@v4
+        with:
+          name: package-ios
+          path: out/*
+          if-no-files-found: error
+
   publish:
-    needs: [prepare, package, android]
+    needs: [prepare, package, android, ios]
     runs-on: ubuntu-22.04
+    permissions:
+      contents: write
     env:
       VERSION: ${{ needs.prepare.outputs.version }}
     steps:
@@ -155,7 +193,7 @@ jobs:
             cp "$f" "dist/$name"
           done
           ls -l dist
-      # 데스크톱 피드(releases.*.json)와 Aragorn-<버전>.apk의 해시를 정책에 넣는다.
+      # 데스크톱 피드(releases.*.json)와 Aragorn-<버전>.apk·.ipa의 해시를 정책에 넣는다.
       - name: 업데이트 정책 생성과 서명
         run: target/debug/xtask make-policy dist dist
         env:

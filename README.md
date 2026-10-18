@@ -5,7 +5,7 @@
 Rust로 만든 게임보이 / 게임보이 컬러 에뮬레이터입니다.
 
 - **목표:** 포켓몬 레드·블루·옐로·골드·실버·크리스탈을 끝까지 즐길 수 있게 하는 것
-- **지원 OS:** Windows, macOS, Linux, Android, iOS(직접 빌드)
+- **지원 OS:** Windows, macOS, Linux, Android, iOS(사이드로딩)
 - **자동 업데이트:** GitHub Releases에서 서명된 업데이트를 받습니다.
 
 > ROM은 들어 있지 않습니다. 직접 가지고 있는 카트리지에서 추출한 ROM을 사용해 주세요.
@@ -43,7 +43,7 @@ Rust로 만든 게임보이 / 게임보이 컬러 에뮬레이터입니다.
 | macOS | `Aragorn-osx-Setup.pkg` | `Aragorn-osx-Portable.zip` |
 | Linux | `Aragorn.AppImage` | — |
 | Android (8.0 이상, 64비트) | `Aragorn-<버전>.apk` | — |
-| iOS (17 이상) | 아직 배포하지 않습니다. Xcode로 직접 빌드합니다 (`mobile/ios/README.md`) | — |
+| iOS (17 이상) | `Aragorn-<버전>.ipa` (서명하지 않음, AltStore·SideStore로 설치) | — |
 
 - 아직 코드 서명을 하지 않았습니다. 그래서 처음 실행할 때 경고가 뜹니다.
   - **Windows:** SmartScreen 경고에서 "추가 정보 → 실행"을 누릅니다.
@@ -55,6 +55,10 @@ Rust로 만든 게임보이 / 게임보이 컬러 에뮬레이터입니다.
   - 새 버전이 나오면 앱이 알려 주고 릴리스 페이지를 엽니다. 받은 APK를 열면 기존 앱 위에 설치되고 세이브도 그대로입니다.
   - ROM은 앱의 "ROM"에서 고릅니다. 세이브는 데스크톱과 같은 형식(`.sav`, `.ss0`–`.ss9`)으로 저장합니다.
   - 세이브 폴더가 파일 앱에 "Aragorn"으로 보입니다. 데스크톱 세이브를 ROM 파일 이름에 맞춰 복사해 넣으면 이어서 할 수 있습니다.
+- iOS 앱은 App Store에 없습니다. 서명하지 않은 IPA를 [AltStore](https://altstore.io)나 [SideStore](https://sidestore.io)로 자기 Apple ID로 서명해 설치합니다.
+  - 무료 Apple ID로 서명한 앱은 7일마다 다시 서명해야 합니다. AltStore·SideStore가 백그라운드에서 처리합니다.
+  - IPA는 이 저장소의 릴리스에서만 받으세요. 릴리스의 `update-policy.json`(서명됨)에 IPA의 SHA256이 들어 있습니다.
+  - 세이브는 파일 앱의 "나의 iPhone › Aragorn › saves"에 보입니다.
 
 ## 사용법
 
