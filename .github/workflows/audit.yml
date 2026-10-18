@@ -1,0 +1,24 @@
+name: Audit
+
+# 의존성의 알려진 취약점(RustSec). 새 권고는 코드가 바뀌지 않아도 나오므로 매주 한 번도 돌린다.
+# 허용한 항목과 근거는 .cargo/audit.toml에 있다.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: "0 0 * * 1" # 매주 월요일 09:00 (KST)
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: cargo-audit 설치
+        run: cargo install cargo-audit --locked
+      - run: cargo audit
