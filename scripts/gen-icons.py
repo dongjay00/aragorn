@@ -10,6 +10,7 @@
 - crates/aragorn-desktop/assets/icon/aragorn.ico   Windows 실행 파일·설치 파일
 - crates/aragorn-desktop/assets/icon/aragorn.icns  macOS 앱 번들
 - docs/images/social-preview.png                   GitHub 대표 이미지 (1280×640)
+- mobile/ios/Aragorn/Assets.xcassets/AppIcon.appiconset/aragorn-1024.png   iOS 앱 아이콘 (1024×1024)
 """
 
 import struct
@@ -19,6 +20,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 ICON_DIR = ROOT / "crates/aragorn-desktop/assets/icon"
 SOCIAL = ROOT / "docs/images/social-preview.png"
+IOS_ICON = ROOT / "mobile/ios/Aragorn/Assets.xcassets/AppIcon.appiconset/aragorn-1024.png"
 
 SIZE = 32
 CLEAR = (0, 0, 0, 0)
@@ -242,7 +244,9 @@ def main():
     (ICON_DIR / "aragorn.ico").write_bytes(ico(sizes))
     (ICON_DIR / "aragorn.icns").write_bytes(icns(sizes))
     SOCIAL.write_bytes(social_preview(icon).png())
-    for path in sorted(ICON_DIR.iterdir()) + [SOCIAL]:
+    IOS_ICON.parent.mkdir(parents=True, exist_ok=True)
+    IOS_ICON.write_bytes(sizes[1024])
+    for path in sorted(ICON_DIR.iterdir()) + [SOCIAL, IOS_ICON]:
         print(f"{path.relative_to(ROOT)} ({path.stat().st_size} bytes)")
 
 

@@ -1,0 +1,7 @@
+# cargo xtask ios가 만드는 것
+build/
+Aragorn/Generated/
+# Xcode 사용자 상태
+xcuserdata/
+*.xcuserstate
+DerivedData/

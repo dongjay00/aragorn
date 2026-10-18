@@ -1,10 +1,10 @@
 //! 업데이트 확인: GitHub Releases의 서명된 정책(데스크톱과 같은 파일)을 검증하고 판단한다.
 //!
-//! 정책 파일은 앱(Kotlin)이 받아 온다. 정책에 `android` 패키지가 있을 때만 Android 새 버전이 있다고 본다.
-//! 데스크톱만 낸 릴리스는 Android에 알리지 않는다.
+//! 정책 파일은 앱(Kotlin·Swift)이 받아 온다. 정책에 이 플랫폼의 패키지(`android`, `ios`)가 있을 때만
+//! 새 버전이 있다고 본다. 데스크톱만 낸 릴리스는 모바일에 알리지 않는다.
 //!
-//! Android는 앱이 스스로 설치할 수 없어 릴리스 페이지로 안내한다. 같은 키로 서명한 APK만 기존 앱
-//! 위에 설치되므로, 받은 APK의 무결성은 Android가 확인한다.
+//! 모바일 앱은 스스로 설치할 수 없어 릴리스 페이지로 안내한다. Android는 같은 키로 서명한 APK만
+//! 기존 앱 위에 설치되므로, 받은 APK의 무결성은 Android가 확인한다.
 
 use crate::EmulatorError;
 use aragorn_app::update::{UpdateDecision, UpdatePolicy, UpdatePrefs, decide, verify_and_parse};
@@ -13,7 +13,11 @@ use semver::Version;
 /// 업데이트 정책 서명 검증용 공개키 (데스크톱과 같다).
 const POLICY_PUBLIC_KEY: &[u8; 32] = include_bytes!("../../../release/policy.pub");
 /// 정책의 패키지 채널 이름.
-pub const ANDROID_CHANNEL: &str = "android";
+pub const PACKAGE_CHANNEL: &str = if cfg!(target_os = "ios") {
+    "ios"
+} else {
+    "android"
+};
 
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Enum)]
 pub enum UpdateCheck {
@@ -60,7 +64,7 @@ fn current_version() -> Version {
 }
 
 fn judge(current: &Version, policy: &UpdatePolicy, skipped: Option<&str>) -> UpdateCheck {
-    if !policy.packages.contains_key(ANDROID_CHANNEL) {
+    if !policy.packages.contains_key(PACKAGE_CHANNEL) {
         return UpdateCheck::UpToDate;
     }
     let prefs = UpdatePrefs {

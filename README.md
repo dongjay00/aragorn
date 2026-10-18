@@ -5,7 +5,7 @@
 Rust로 만든 게임보이 / 게임보이 컬러 에뮬레이터입니다.
 
 - **목표:** 포켓몬 레드·블루·옐로·골드·실버·크리스탈을 끝까지 즐길 수 있게 하는 것
-- **지원 OS:** Windows, macOS, Linux, Android
+- **지원 OS:** Windows, macOS, Linux, Android, iOS(직접 빌드)
 - **자동 업데이트:** GitHub Releases에서 서명된 업데이트를 받습니다.
 
 > ROM은 들어 있지 않습니다. 직접 가지고 있는 카트리지에서 추출한 ROM을 사용해 주세요.
@@ -43,6 +43,7 @@ Rust로 만든 게임보이 / 게임보이 컬러 에뮬레이터입니다.
 | macOS | `Aragorn-osx-Setup.pkg` | `Aragorn-osx-Portable.zip` |
 | Linux | `Aragorn.AppImage` | — |
 | Android (8.0 이상, 64비트) | `Aragorn-<버전>.apk` | — |
+| iOS (17 이상) | 아직 배포하지 않습니다. Xcode로 직접 빌드합니다 (`mobile/ios/README.md`) | — |
 
 - 아직 코드 서명을 하지 않았습니다. 그래서 처음 실행할 때 경고가 뜹니다.
   - **Windows:** SmartScreen 경고에서 "추가 정보 → 실행"을 누릅니다.

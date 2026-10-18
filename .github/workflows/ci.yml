@@ -53,3 +53,21 @@ jobs:
       - name: APK 빌드
         working-directory: mobile/android
         run: ./gradlew assembleDebug --no-daemon
+
+  ios:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-ios, aarch64-apple-ios-sim
+      - uses: Swatinem/rust-cache@v2
+      # Xcode는 빌드를 시작할 때 폴더 안 파일 목록을 정하므로 Swift 바인딩을 먼저 만든다.
+      - name: Rust 라이브러리와 Swift 바인딩
+        run: cargo xtask ios --platform=iphonesimulator
+      - name: 앱 빌드 (시뮬레이터)
+        working-directory: mobile/ios
+        run: |
+          xcodebuild -project Aragorn.xcodeproj -scheme Aragorn \
+            -destination 'generic/platform=iOS Simulator' \
+            -derivedDataPath DerivedData build CODE_SIGNING_ALLOWED=NO

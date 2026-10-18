@@ -66,14 +66,14 @@ pub fn build(root: &Path, args: &[String]) -> Result<(), String> {
     Ok(())
 }
 
-fn cargo(root: &Path) -> Command {
+pub fn cargo(root: &Path) -> Command {
     let cargo = env::var_os("CARGO").map_or_else(|| PathBuf::from("cargo"), PathBuf::from);
     let mut command = Command::new(cargo);
     command.current_dir(root);
     command
 }
 
-fn run(mut command: Command, hint: &str) -> Result<(), String> {
+pub fn run(mut command: Command, hint: &str) -> Result<(), String> {
     let status = command
         .status()
         .map_err(|e| format!("{command:?}을(를) 실행할 수 없습니다: {e} ({hint})"))?;
