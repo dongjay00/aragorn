@@ -38,6 +38,8 @@ final class GameModel {
     /// 화면 아래에 보일 안내·오류 문구.
     private(set) var notice: String?
     private(set) var muted: Bool
+    /// 가상 패드를 누를 때 햅틱을 낼지.
+    private(set) var haptics: Bool
     /// 사용자가 일시정지했는지.
     private(set) var paused = false
     /// 지금 실행 배율 (`1배`, `4배`, `일시정지`).
@@ -70,6 +72,7 @@ final class GameModel {
         try? FileManager.default.createDirectory(at: support, withIntermediateDirectories: true)
         settings = Settings.open(path: support.appending(path: "config.json").path)
         muted = settings.muted()
+        haptics = settings.haptics()
         baseSpeed = settings.baseSpeed()
         fastSpeed = settings.fastSpeed()
         input = GameInput { [weak self] device, name, pressed in
@@ -237,6 +240,11 @@ final class GameModel {
         muted = value
         emulator?.setMuted(muted: value)
         saveSetting { try self.settings.setMuted(muted: value) }
+    }
+
+    func setHaptics(_ value: Bool) {
+        haptics = value
+        saveSetting { try self.settings.setHaptics(on: value) }
     }
 
     func setBaseSpeed(_ speed: Speed) {

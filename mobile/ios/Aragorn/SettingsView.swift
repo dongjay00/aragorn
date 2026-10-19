@@ -54,8 +54,13 @@ struct SettingsView: View {
                     Text("배속 속도는 배속 버튼·키를 누르는 동안의 속도입니다. 2배·4배에서는 소리가 빠르고 높게 들립니다. 무제한에서는 소리가 나지 않습니다.")
                 }
 
-                Section("소리") {
+                Section {
                     Toggle("음소거", isOn: Binding(get: { model.muted }, set: model.setMuted))
+                    Toggle("버튼 햅틱", isOn: Binding(get: { model.haptics }, set: model.setHaptics))
+                } header: {
+                    Text("소리와 햅틱")
+                } footer: {
+                    Text("버튼 햅틱: 화면의 방향키와 버튼을 누를 때 진동합니다.")
                 }
 
                 Section("세이브") {
