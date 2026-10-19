@@ -48,6 +48,7 @@ fun SettingsScreen(viewModel: GameViewModel, onBack: () -> Unit) {
     val baseSpeed by viewModel.baseSpeed.collectAsStateWithLifecycle()
     val fastSpeed by viewModel.fastSpeed.collectAsStateWithLifecycle()
     val muted by viewModel.muted.collectAsStateWithLifecycle()
+    val haptics by viewModel.haptics.collectAsStateWithLifecycle()
     val update by viewModel.update.collectAsStateWithLifecycle()
     val notice by viewModel.notice.collectAsStateWithLifecycle()
 
@@ -124,10 +125,17 @@ fun SettingsScreen(viewModel: GameViewModel, onBack: () -> Unit) {
                     style = MaterialTheme.typography.bodySmall,
                 )
 
-                Section("소리")
+                Section("소리와 햅틱")
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text("음소거", Modifier.weight(1f))
                     Switch(checked = muted, onCheckedChange = viewModel::setMuted)
+                }
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text("버튼 햅틱")
+                        Text("화면의 방향키와 버튼을 누를 때 진동합니다.", style = MaterialTheme.typography.bodySmall)
+                    }
+                    Switch(checked = haptics, onCheckedChange = viewModel::setHaptics)
                 }
 
                 Section("세이브")

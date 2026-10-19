@@ -149,6 +149,7 @@ private struct PadButton: View {
 
 /// 누르는 동안 눌린 버튼. 버튼마다 따로 터치를 받으므로 방향키와 함께 누를 수 있다.
 private struct HoldButton: View {
+    @Environment(GameModel.self) private var model
     let label: String
     let shape: KeyShape
     let width: CGFloat
@@ -171,7 +172,7 @@ private struct HoldButton: View {
                         guard !held else { return }
                         held = true
                         onHold(true)
-                        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                        if model.haptics { UIImpactFeedbackGenerator(style: .light).impactOccurred() }
                     }
                     .onEnded { _ in
                         held = false
@@ -186,6 +187,7 @@ private struct HoldButton: View {
  가운데에서 가까우면 아무 방향도 누르지 않는다 (Android와 같은 판정).
  */
 private struct DPad: View {
+    @Environment(GameModel.self) private var model
     let onButton: (GbButton, Bool) -> Void
     @State private var pressed: Set<GbButton> = []
     private let key: CGFloat = 52
@@ -235,7 +237,7 @@ private struct DPad: View {
         pressed.subtracting(now).forEach { onButton($0, false) }
         let added = now.subtracting(pressed)
         added.forEach { onButton($0, true) }
-        if !added.isEmpty { UIImpactFeedbackGenerator(style: .light).impactOccurred() }
+        if model.haptics && !added.isEmpty { UIImpactFeedbackGenerator(style: .light).impactOccurred() }
         pressed = now
     }
 }

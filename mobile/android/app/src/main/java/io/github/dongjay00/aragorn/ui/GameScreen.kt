@@ -27,6 +27,9 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.compositionLocalOf
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -55,6 +58,9 @@ private val Body = Color(0xFF1E1E24)
 private val KeyColor = Color(0xFF3A3A44)
 private val KeyPressed = Color(0xFF5A5A68)
 private val ActionColor = Color(0xFF8B2252)
+/** 가상 패드를 누를 때 햅틱을 낼지 (설정의 "버튼 햅틱"). */
+private val LocalPadHaptics = compositionLocalOf { true }
+
 private val PillShape = RoundedCornerShape(50)
 private val KeyShape = RoundedCornerShape(8.dp)
 /** 가로 화면에서 게임 화면 위아래에 쓰는 높이 (툴바 + 상태 줄). */
@@ -67,6 +73,7 @@ fun GameScreen(viewModel: GameViewModel, onOpenRom: () -> Unit) {
     val paused by viewModel.paused.collectAsStateWithLifecycle()
     val muted by viewModel.muted.collectAsStateWithLifecycle()
     val speedText by viewModel.speedText.collectAsStateWithLifecycle()
+    val haptics by viewModel.haptics.collectAsStateWithLifecycle()
     var slotsOpen by remember { mutableStateOf(false) }
 
     val toolbar = @Composable {
@@ -113,60 +120,63 @@ fun GameScreen(viewModel: GameViewModel, onOpenRom: () -> Unit) {
         }
     }
 
-    BoxWithConstraints(Modifier.fillMaxSize().background(Body).safeDrawingPadding()) {
-        if (maxWidth > maxHeight) {
-            // 가로: 왼쪽 방향키, 가운데 화면, 오른쪽 A/B. 화면 폭은 남는 높이(툴바와 상태 줄을 뺀 것)로 정한다.
-            val lcdWidth = (maxHeight - LANDSCAPE_CHROME) * (160f / 144f)
-            Column(Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
-                toolbar()
-                Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
-                    Column(
-                        Modifier.weight(1f).fillMaxHeight(),
-                        verticalArrangement = Arrangement.SpaceEvenly,
-                        horizontalAlignment = Alignment.CenterHorizontally,
+    CompositionLocalProvider(LocalPadHaptics provides haptics) {
+        BoxWithConstraints(Modifier.fillMaxSize().background(Body).safeDrawingPadding()) {
+            if (maxWidth > maxHeight) {
+                // 가로: 왼쪽 방향키, 가운데 화면, 오른쪽 A/B. 화면 폭은 남는 높이(툴바와 상태 줄을 뺀 것)로 정한다.
+                val lcdWidth = (maxHeight - LANDSCAPE_CHROME) * (160f / 144f)
+                Column(Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
+                    toolbar()
+                    Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
+                        Column(
+                            Modifier.weight(1f).fillMaxHeight(),
+                            verticalArrangement = Arrangement.SpaceEvenly,
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                        ) {
+                            DPad(viewModel::setButton)
+                            PadButton("SELECT", GbButton.SELECT, viewModel::setButton, PillShape, 72.dp, 28.dp)
+                        }
+                        Column(Modifier.width(lcdWidth).fillMaxHeight(), horizontalAlignment = Alignment.CenterHorizontally) {
+                            screen(Modifier.fillMaxWidth())
+                            status()
+                        }
+                        Column(
+                            Modifier.weight(1f).fillMaxHeight(),
+                            verticalArrangement = Arrangement.SpaceEvenly,
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                        ) {
+                            ActionButtons(viewModel)
+                            PadButton("START", GbButton.START, viewModel::setButton, PillShape, 72.dp, 28.dp)
+                        }
+                    }
+                }
+            } else {
+                Column(
+                    Modifier.fillMaxSize().padding(horizontal = 16.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                ) {
+                    toolbar()
+                    screen(Modifier.fillMaxWidth())
+                    status()
+                    Spacer(Modifier.weight(1f))
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
                     ) {
                         DPad(viewModel::setButton)
-                        PadButton("SELECT", GbButton.SELECT, viewModel::setButton, PillShape, 72.dp, 28.dp)
-                    }
-                    Column(Modifier.width(lcdWidth).fillMaxHeight(), horizontalAlignment = Alignment.CenterHorizontally) {
-                        screen(Modifier.fillMaxWidth())
-                        status()
-                    }
-                    Column(
-                        Modifier.weight(1f).fillMaxHeight(),
-                        verticalArrangement = Arrangement.SpaceEvenly,
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                    ) {
                         ActionButtons(viewModel)
+                    }
+                    Spacer(Modifier.height(24.dp))
+                    Row(Modifier.padding(bottom = 24.dp)) {
+                        PadButton("SELECT", GbButton.SELECT, viewModel::setButton, PillShape, 72.dp, 28.dp)
+                        Spacer(Modifier.width(16.dp))
                         PadButton("START", GbButton.START, viewModel::setButton, PillShape, 72.dp, 28.dp)
                     }
                 }
             }
-        } else {
-            Column(
-                Modifier.fillMaxSize().padding(horizontal = 16.dp),
-                horizontalAlignment = Alignment.CenterHorizontally,
-            ) {
-                toolbar()
-                screen(Modifier.fillMaxWidth())
-                status()
-                Spacer(Modifier.weight(1f))
-                Row(
-                    Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    DPad(viewModel::setButton)
-                    ActionButtons(viewModel)
-                }
-                Spacer(Modifier.height(24.dp))
-                Row(Modifier.padding(bottom = 24.dp)) {
-                    PadButton("SELECT", GbButton.SELECT, viewModel::setButton, PillShape, 72.dp, 28.dp)
-                    Spacer(Modifier.width(16.dp))
-                    PadButton("START", GbButton.START, viewModel::setButton, PillShape, 72.dp, 28.dp)
-                }
-            }
         }
+
     }
 
     if (slotsOpen) {
@@ -234,12 +244,15 @@ private fun ActionButtons(viewModel: GameViewModel) {
 private fun DPad(onButton: (GbButton, Boolean) -> Unit) {
     val key = 52.dp
     val haptics = LocalHapticFeedback.current
+    val hapticsOn by rememberUpdatedState(LocalPadHaptics.current)
     var pressed by remember { mutableStateOf(emptySet<GbButton>()) }
     fun press(now: Set<GbButton>) {
         if (now == pressed) return
         (pressed - now).forEach { onButton(it, false) }
         (now - pressed).forEach { onButton(it, true) }
-        if ((now - pressed).isNotEmpty()) haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+        if (hapticsOn && (now - pressed).isNotEmpty()) {
+            haptics.performHapticFeedback(HapticFeedbackType.VirtualKey)
+        }
         pressed = now
     }
     Box(
@@ -322,6 +335,7 @@ private fun HoldButton(
     color: Color = KeyColor,
 ) {
     val haptics = LocalHapticFeedback.current
+    val hapticsOn by rememberUpdatedState(LocalPadHaptics.current)
     var held by remember { mutableStateOf(false) }
     Box(
         modifier
@@ -333,7 +347,7 @@ private fun HoldButton(
                     awaitFirstDown(requireUnconsumed = false)
                     held = true
                     onHold(true)
-                    haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                    if (hapticsOn) haptics.performHapticFeedback(HapticFeedbackType.VirtualKey)
                     try {
                         waitForUpOrCancellation()
                     } finally {

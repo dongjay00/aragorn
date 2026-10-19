@@ -63,6 +63,10 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     private val _muted = MutableStateFlow(settings.muted())
     val muted: StateFlow<Boolean> = _muted.asStateFlow()
 
+    private val _haptics = MutableStateFlow(settings.haptics())
+    /** 가상 패드를 누를 때 햅틱을 낼지. */
+    val haptics: StateFlow<Boolean> = _haptics.asStateFlow()
+
     private val _paused = MutableStateFlow(false)
     /** 사용자가 일시정지했는지. */
     val paused: StateFlow<Boolean> = _paused.asStateFlow()
@@ -274,6 +278,11 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         _muted.value = muted
         _emulator.value?.setMuted(muted)
         saveSetting { settings.setMuted(muted) }
+    }
+
+    fun setHaptics(on: Boolean) {
+        _haptics.value = on
+        saveSetting { settings.setHaptics(on) }
     }
 
     fun setBaseSpeed(speed: Speed) {

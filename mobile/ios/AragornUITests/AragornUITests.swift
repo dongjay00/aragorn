@@ -30,6 +30,22 @@ final class AragornUITests: XCTestCase {
         app.descendants(matching: .any)[identifier]
     }
 
+    /// 툴바 메뉴(⋯)를 열고 항목을 누른다. 메뉴가 다 열릴 때까지 기다린다.
+    private func openMenu(_ item: String) {
+        app.buttons["메뉴"].tap()
+        let button = app.buttons[item]
+        XCTAssertTrue(button.waitForExistence(timeout: 5), "메뉴에 \(item)이(가) 없습니다")
+        button.tap()
+    }
+
+    /// 목록은 화면에 보이는 줄만 만든다. 보일 때까지 아래로 넘긴다.
+    private func scrollTo(_ element: XCUIElement) -> XCUIElement {
+        for _ in 0..<6 where !(element.exists && element.isHittable) {
+            app.swipeUp()
+        }
+        return element
+    }
+
     func testPauseButtonStopsTheGame() {
         app.buttons["일시정지"].tap()
         XCTAssertTrue(app.staticTexts["status.speed"].wait(for: \.label, toEqual: "일시정지", timeout: 5))
@@ -56,8 +72,7 @@ final class AragornUITests: XCTestCase {
     }
 
     func testSettingsWaitsForAKey() {
-        app.buttons["메뉴"].tap()
-        app.buttons["설정"].tap()
+        openMenu("설정")
         app.buttons["X"].tap()
         XCTAssertTrue(app.buttons["입력 대기…"].waitForExistence(timeout: 5))
         app.buttons["취소"].tap()
@@ -67,8 +82,7 @@ final class AragornUITests: XCTestCase {
     }
 
     func testBreakpointStopsAtThePc() {
-        app.buttons["메뉴"].tap()
-        app.buttons["디버거"].tap()
+        openMenu("디버거")
         let row = element("disasm.0100")
         XCTAssertTrue(row.waitForExistence(timeout: 5))
         row.tap()
@@ -90,5 +104,25 @@ final class AragornUITests: XCTestCase {
         let screenshot = XCTAttachment(screenshot: app.screenshot())
         screenshot.lifetime = .keepAlways
         add(screenshot)
+    }
+
+    func testHapticsSettingIsSaved() {
+        openMenu("설정")
+        let toggle = scrollTo(app.switches["버튼 햅틱"])
+        XCTAssertTrue(toggle.exists)
+        XCTAssertEqual(toggle.value as? String, "1", "기본은 켜짐")
+        toggle.switches.firstMatch.tap()
+        XCTAssertEqual(toggle.value as? String, "0")
+
+        // 다시 켜도 꺼진 채로 남는다.
+        app.terminate()
+        app.launch()
+        XCTAssertTrue(notice.wait(for: \.label, toEqual: "ARAGORN TEST 실행 중", timeout: 10))
+        openMenu("설정")
+        let reopened = scrollTo(app.switches["버튼 햅틱"])
+        XCTAssertEqual(reopened.value as? String, "0")
+        // 다음 테스트를 위해 되돌린다.
+        reopened.switches.firstMatch.tap()
+        XCTAssertEqual(reopened.value as? String, "1")
     }
 }
