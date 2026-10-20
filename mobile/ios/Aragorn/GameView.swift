@@ -165,6 +165,8 @@ struct GameView: View {
                 Button("처음부터 다시 시작", action: model.restart)
                     .disabled(model.emulator == nil)
                 Button("패드 위치 편집", action: model.startPadEdit)
+                Button("링크 케이블") { model.page = .link }
+                    .disabled(model.emulator == nil)
                 Button("치트") { model.page = .cheats }
                     .disabled(model.emulator == nil)
                 Button("디버거") { model.page = .debugger }
@@ -219,7 +221,8 @@ struct GameView: View {
 
     private var status: some View {
         HStack {
-            Text(model.notice ?? "").lineLimit(1).accessibilityIdentifier("status.notice")
+            // 링크를 쓰는 동안에는 링크 상태를 먼저 보인다.
+            Text(model.linkText ?? model.notice ?? "").lineLimit(1).accessibilityIdentifier("status.notice")
             Spacer()
             if model.emulator != nil { Text(model.speedText).accessibilityIdentifier("status.speed") }
         }

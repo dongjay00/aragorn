@@ -26,4 +26,5 @@ pub use gameboy::{DebugView, GameBoy};
 pub use joypad::Button;
 pub use model::Model;
 pub use ppu::PaletteKind;
+pub use serial::LinkMessage;
 pub use state::{RomId, StateError};

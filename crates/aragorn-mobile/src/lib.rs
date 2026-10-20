@@ -88,6 +88,27 @@ pub struct SlotSummary {
     pub thumbnail: Option<Image>,
 }
 
+/// 링크 케이블 상태.
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Enum)]
+pub enum LinkState {
+    /// 상대를 기다린다. 상대는 `address`로 연결한다.
+    Waiting {
+        address: String,
+    },
+    Connecting {
+        address: String,
+    },
+    Connected {
+        peer: String,
+    },
+}
+
+/// 이 기기의 LAN 주소. 모르면 `None`.
+#[uniffi::export]
+pub fn local_address() -> Option<String> {
+    aragorn_host::local_ip()
+}
+
 /// 치트 목록의 한 줄.
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
 pub struct CheatInfo {
@@ -261,6 +282,54 @@ impl Emulator {
             state.video = video.into();
             state.publish();
         });
+    }
+
+    // ---- 링크 케이블 ----
+
+    /// 이 기기에서 상대를 기다린다. 상대가 입력할 주소를 돌려준다.
+    pub fn link_host(&self) -> Result<String, EmulatorError> {
+        let link = aragorn_host::TcpLink::host(aragorn_host::DEFAULT_PORT).map_err(|e| {
+            EmulatorError::Io {
+                reason: format!("링크를 열 수 없습니다: {e}"),
+            }
+        })?;
+        let address = match aragorn_app::link::LinkTransport::status(&link) {
+            aragorn_app::link::LinkStatus::Waiting { address } => address,
+            _ => String::new(),
+        };
+        self.post(move |state| state.session.set_link(Box::new(link)));
+        Ok(address)
+    }
+
+    /// 상대 주소(`192.168.0.5`, 포트를 빼면 기본 포트)로 연결한다. 결과는 `link_state`로 본다.
+    pub fn link_connect(&self, address: String) {
+        self.post(move |state| {
+            state
+                .session
+                .set_link(Box::new(aragorn_host::TcpLink::connect(&address)))
+        });
+    }
+
+    pub fn link_disconnect(&self) {
+        self.post(|state| state.session.disconnect_link());
+    }
+
+    /// 링크 상태. 쓰지 않거나 끊겼으면 `None` (끊긴 이유는 안내 문구로 온다).
+    pub fn link_state(&self) -> Option<LinkState> {
+        use aragorn_app::link::LinkStatus;
+        self.call(|state| match state.session.link_status()? {
+            LinkStatus::Waiting { address } => Some(LinkState::Waiting { address }),
+            LinkStatus::Connecting { address } => Some(LinkState::Connecting { address }),
+            LinkStatus::Connected { peer } => Some(LinkState::Connected { peer }),
+            LinkStatus::Closed { .. } => None,
+        })
+        .ok()
+        .flatten()
+    }
+
+    /// 상태 줄에 보일 링크 문구. 기다리지 않고 바로 읽는다.
+    pub fn link_text(&self) -> Option<String> {
+        self.screen.link_text()
     }
 
     // ---- 치트 ----
@@ -766,6 +835,42 @@ mod tests {
         // IHDR의 폭과 높이
         assert_eq!(u32::from_be_bytes(png[16..20].try_into().unwrap()), 480);
         assert_eq!(u32::from_be_bytes(png[20..24].try_into().unwrap()), 432);
+    }
+
+    #[test]
+    fn two_emulators_link_over_tcp() {
+        let dir = tempfile::tempdir().unwrap();
+        let host = start(&dir);
+        let other = tempfile::tempdir().unwrap();
+        let client = start(&other);
+        let address = host.link_host().unwrap();
+        assert!(address.ends_with(":5151"), "{address}");
+        assert!(matches!(host.link_state(), Some(LinkState::Waiting { .. })));
+        client.link_connect("127.0.0.1".into());
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !matches!(client.link_state(), Some(LinkState::Connected { .. })) {
+            assert!(Instant::now() < deadline, "{:?}", client.link_state());
+            thread::sleep(Duration::from_millis(20));
+        }
+        assert!(host.link_text().is_some());
+        client.link_disconnect();
+        assert_eq!(client.link_state(), None);
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while host.link_state().is_some() {
+            assert!(Instant::now() < deadline, "상대가 끊은 것을 알아야 한다");
+            thread::sleep(Duration::from_millis(20));
+        }
+        // 안내 문구는 에뮬레이터 스레드가 다음 차례에 넘긴다.
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let mut notices = Vec::new();
+        while !notices
+            .iter()
+            .any(|n: &String| n.starts_with("링크가 끊겼습니다"))
+        {
+            assert!(Instant::now() < deadline, "{notices:?}");
+            notices.extend(host.take_notices());
+            thread::sleep(Duration::from_millis(20));
+        }
     }
 
     #[test]

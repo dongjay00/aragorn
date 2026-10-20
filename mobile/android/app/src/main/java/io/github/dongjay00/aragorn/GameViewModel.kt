@@ -43,7 +43,7 @@ import java.io.File
 enum class PadGroup { DPAD, BUTTONS, SELECT, START }
 
 /** 앱 화면. 뒤로 가기는 게임 화면으로 돌아온다. */
-enum class Page { GAME, SETTINGS, DEBUGGER, CHEATS }
+enum class Page { GAME, SETTINGS, DEBUGGER, CHEATS, LINK }
 
 /** 업데이트 확인 상태. */
 sealed interface UpdateState {
@@ -108,6 +108,10 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     private val _cheats = MutableStateFlow<List<CheatInfo>>(emptyList())
     /** 지금 게임의 치트 목록. */
     val cheats: StateFlow<List<CheatInfo>> = _cheats.asStateFlow()
+
+    private val _linkText = MutableStateFlow<String?>(null)
+    /** 링크 케이블 상태 문구 (쓰지 않으면 `null`). */
+    val linkText: StateFlow<String?> = _linkText.asStateFlow()
 
     private val _paused = MutableStateFlow(false)
     /** 사용자가 일시정지했는지. */
@@ -322,6 +326,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         val emulator = _emulator.value ?: return
         emulator.takeNotices().lastOrNull()?.let { _notice.value = it }
         _speedText.value = emulator.speedText()
+        _linkText.value = emulator.linkText()
         _paused.value = emulator.isPaused()
     }
 
@@ -508,6 +513,21 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         _padLayout.update {
             if (landscape) it.copy(landscape = NO_OFFSETS) else it.copy(portrait = NO_OFFSETS)
         }
+    }
+
+    // ---- 링크 케이블 ----
+
+    fun linkHost() {
+        val emulator = _emulator.value ?: return
+        saveSetting { emulator.linkHost() }
+    }
+
+    fun linkConnect(address: String) {
+        _emulator.value?.linkConnect(address)
+    }
+
+    fun linkDisconnect() {
+        _emulator.value?.linkDisconnect()
     }
 
     // ---- 치트 ----

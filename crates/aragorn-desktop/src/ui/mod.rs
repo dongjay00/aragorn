@@ -3,6 +3,7 @@ pub mod debugger;
 pub mod fonts;
 pub mod input;
 pub mod io_view;
+pub mod link;
 pub mod screen;
 pub mod settings;
 pub mod state_slots;
