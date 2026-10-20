@@ -8,6 +8,7 @@ use crate::joypad::{self, Button, Joypad};
 use crate::model::Model;
 use crate::ppu::{self, Ppu};
 use crate::serial::{self, Serial};
+use crate::sgb::Sgb;
 use crate::timer::{self, Timer};
 
 pub const INT_VBLANK: u8 = 0x01;
@@ -86,6 +87,9 @@ pub struct Bus {
     /// 켜 둔 치트. 스테이트에 넣지 않는다.
     #[serde(skip)]
     cheats: Cheats,
+    /// 슈퍼 게임보이 기능을 쓰는 흑백 게임이면 `Some`. 이 필드가 없던 스테이트도 읽는다.
+    #[serde(default)]
+    pub(crate) sgb: Option<Box<Sgb>>,
 }
 
 impl Bus {
@@ -118,6 +122,23 @@ impl Bus {
             cycles: 0,
             dots: 0,
             cheats: Cheats::default(),
+            sgb: None,
+        }
+    }
+
+    /// 슈퍼 게임보이 기능을 켠다 (SGB를 지원하는 흑백 게임).
+    pub(crate) fn enable_sgb(&mut self) {
+        self.sgb = Some(Box::default());
+    }
+
+    pub(crate) fn sgb(&self) -> Option<&Sgb> {
+        self.sgb.as_deref()
+    }
+
+    /// 프레임이 끝났다. SGB가 VRAM 전송을 기다리면 이 화면을 읽어 간다.
+    pub(crate) fn frame_done(&mut self) {
+        if let Some(sgb) = &mut self.sgb {
+            sgb.frame_done(self.ppu.framebuffer());
         }
     }
 
@@ -144,6 +165,12 @@ impl Bus {
         self.cart.adopt_rom(&host.cart)?;
         self.apu.adopt_host(&host.apu);
         self.cheats = host.cheats.clone();
+        // SGB 기능이 생기기 전의 스테이트: 새로 켠다. 게임이 다음 화면에서 팔레트를 다시 보낸다.
+        match (&self.sgb, &host.sgb) {
+            (None, Some(_)) => self.enable_sgb(),
+            (Some(_), None) => self.sgb = None,
+            _ => {}
+        }
         self.sanitize();
         Ok(())
     }
@@ -241,7 +268,13 @@ impl Bus {
 
     fn read_io(&self, addr: u16) -> u8 {
         match addr {
-            joypad::P1 => self.joypad.read(),
+            joypad::P1 => {
+                let value = self.joypad.read();
+                match self.sgb.as_ref().and_then(|s| s.read_p1_low(value)) {
+                    Some(low) => (value & 0xF0) | low,
+                    None => value,
+                }
+            }
             serial::SB | serial::SC => self.serial.read(addr),
             timer::DIV..=timer::TAC => self.timer.read(addr),
             IF_ADDR => self.if_ | 0xE0,
@@ -265,6 +298,9 @@ impl Bus {
             joypad::P1 => {
                 let irq = self.joypad.write(value);
                 self.request(INT_JOYPAD, irq);
+                if let Some(sgb) = &mut self.sgb {
+                    sgb.write_p1(value, self.ppu.framebuffer());
+                }
             }
             serial::SB | serial::SC => {
                 let irq = self.serial.write(addr, value);

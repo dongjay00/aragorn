@@ -25,9 +25,14 @@ impl GameBoy {
     pub fn new(rom: Vec<u8>, model: Model) -> Result<GameBoy, CartError> {
         let cart = Cartridge::new(rom)?;
         let model = model.resolve(cart.header().cgb_flag);
+        let sgb = model == Model::Dmg && cart.header().supports_sgb();
+        let mut bus = Bus::new(cart, model);
+        if sgb {
+            bus.enable_sgb();
+        }
         Ok(GameBoy {
             cpu: Cpu::new(Registers::post_boot(model)),
-            bus: Bus::new(cart, model),
+            bus,
             model,
             debugger: Debugger::default(),
         })
@@ -80,6 +85,7 @@ impl GameBoy {
             self.traced_step();
             if self.bus.take_frame_ready() {
                 self.bus.apply_cheat_writes();
+                self.bus.frame_done();
                 return;
             }
             if self.bus.dots() >= deadline {
@@ -117,6 +123,11 @@ impl GameBoy {
     /// 160×144, 각 픽셀은 0xRRGGBBAA.
     pub fn framebuffer(&self) -> &[u32] {
         self.bus.ppu().framebuffer()
+    }
+
+    /// 슈퍼 게임보이 기능을 쓰는 게임이면 그 상태 (팔레트, 테두리).
+    pub fn sgb(&self) -> Option<&crate::sgb::Sgb> {
+        self.bus.sgb()
     }
 
     /// 키를 누르거나 뗀다. 선택된 줄에서 새로 눌리면 조이패드 인터럽트를 요청한다.
@@ -315,6 +326,70 @@ mod tests {
         let mut gb = gb_with_program(&[0x3C]); // INC A
         gb.step();
         assert_eq!(gb.debug().registers().pc, 0x0101);
+    }
+
+    #[test]
+    fn sgb_games_get_sgb_features_but_stay_dmg() {
+        let mut rom = test_rom(0x00, 0x00, 0x00);
+        assert!(
+            GameBoy::new(rom.clone(), Model::Auto)
+                .unwrap()
+                .sgb()
+                .is_none()
+        );
+        rom[0x0146] = 0x03;
+        rom[0x014B] = 0x33;
+        let gb = GameBoy::new(rom.clone(), Model::Auto).unwrap();
+        assert_eq!(gb.model(), Model::Dmg);
+        assert!(gb.sgb().is_some());
+        // CGB 게임은 SGB 플래그가 있어도 컬러로 돈다.
+        rom[0x0143] = 0x80;
+        assert!(GameBoy::new(rom, Model::Auto).unwrap().sgb().is_none());
+    }
+
+    #[test]
+    fn game_code_sends_an_sgb_palette_through_the_joypad_port() {
+        // 0x0200의 16바이트 패킷을 P1 쓰기로 보내는 프로그램 (리셋 펄스, 비트마다 0x10/0x20 뒤 0x30, 정지 비트).
+        let program = [
+            0x21, 0x00, 0x02, // LD HL,0x0200
+            0x3E, 0x00, 0xE0, 0x00, // 리셋
+            0x3E, 0x30, 0xE0, 0x00, //
+            0x06, 0x10, // LD B,16
+            0x2A, 0x57, 0x0E, 0x08, // byte: LD A,(HL+) ; LD D,A ; LD C,8
+            0x3E, 0x10, 0xCB, 0x42, 0x20, 0x02, 0x3E, 0x20, // bit: 1이면 0x10, 0이면 0x20
+            0xE0, 0x00, 0x3E, 0x30, 0xE0, 0x00, // 보내고 0x30
+            0xCB, 0x1A, 0x0D, 0x20, 0xED, // RR D ; DEC C ; JR NZ,bit
+            0x05, 0x20, 0xE6, // DEC B ; JR NZ,byte
+            0x3E, 0x20, 0xE0, 0x00, 0x3E, 0x30, 0xE0, 0x00, // 정지 비트
+            0x18, 0xFE,
+        ];
+        let mut rom = test_rom(0x00, 0x00, 0x00);
+        rom[0x0100..0x0100 + program.len()].copy_from_slice(&program);
+        // PAL01: 색 0 = 빨강(0x001F)
+        rom[0x0200..0x0203].copy_from_slice(&[1, 0x1F, 0x00]); // PAL01, 패킷 1개
+        rom[0x0146] = 0x03;
+        rom[0x014B] = 0x33;
+        let mut gb = GameBoy::new(rom, Model::Auto).unwrap();
+        let before = gb.sgb().unwrap().colorize(gb.framebuffer())[0];
+        gb.run_frame();
+        gb.run_frame();
+        let after = gb.sgb().unwrap().colorize(gb.framebuffer())[0];
+        assert_ne!(before, after);
+        assert_eq!(after, 0xFF00_00FF);
+    }
+
+    #[test]
+    fn state_from_before_sgb_still_loads() {
+        let mut rom = test_rom(0x00, 0x00, 0x00);
+        rom[0x0146] = 0x03;
+        rom[0x014B] = 0x33;
+        let mut gb = GameBoy::new(rom.clone(), Model::Auto).unwrap();
+        // SGB 기능이 없던 버전의 스테이트: sgb 필드가 없다.
+        gb.bus.sgb = None;
+        let old = gb.save_state(0);
+        let mut gb = GameBoy::new(rom, Model::Auto).unwrap();
+        gb.load_state(&old, 0).unwrap();
+        assert!(gb.sgb().is_some(), "다시 켠다");
     }
 
     #[test]

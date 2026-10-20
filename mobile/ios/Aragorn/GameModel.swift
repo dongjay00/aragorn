@@ -17,6 +17,9 @@ enum UpdateState: Equatable {
     case required(version: String, message: String)
 }
 
+/// 위치를 옮길 수 있는 가상 패드 묶음.
+enum PadGroup { case dpad, buttons, select, start }
+
 /// 키 설정에서 입력을 기다리는 칸.
 struct Capture: Equatable {
     let device: InputDevice
@@ -46,8 +49,12 @@ final class GameModel {
     private(set) var rewindEnabled: Bool
     /// 게임을 닫을 때의 자리에서 이어서 할지.
     private(set) var autoResume: Bool
-    /// 가상 패드 크기·불투명도·높이.
+    /// 가상 패드 크기·불투명도·높이·위치.
     var padLayout: PadLayout
+    /// 가상 패드 위치 편집 중인지. 편집 중에는 패드를 눌러도 게임에 보내지 않는다.
+    private(set) var editingPad = false
+    /// 지금 화면 크기. 슈퍼 게임보이 테두리를 그리면 256×224다.
+    private(set) var frameSize = CGSize(width: 160, height: 144)
     /// 최근에 연 게임, 최근 것부터.
     private(set) var recent: [RecentRom] = []
     /// 지금 게임의 치트 목록.
@@ -402,8 +409,45 @@ final class GameModel {
     }
 
     func resetPadLayout() {
-        padLayout = PadLayout(scale: 1, opacity: 1, lift: 0)
+        padLayout = PadLayout(scale: 1, opacity: 1, lift: 0, portrait: Self.noOffsets, landscape: Self.noOffsets)
         savePadLayout()
+    }
+
+    private static let noOffsets = PadOffsets(
+        dpadX: 0, dpadY: 0, buttonsX: 0, buttonsY: 0, selectX: 0, selectY: 0, startX: 0, startY: 0
+    )
+
+    func setFrameSize(_ size: CGSize) {
+        if size != frameSize { frameSize = size }
+    }
+
+    /// 게임 화면에서 버튼 묶음을 끌어 옮긴다. 끝내면 `finishPadEdit`.
+    func startPadEdit() {
+        page = .game
+        editingPad = true
+    }
+
+    func finishPadEdit() {
+        editingPad = false
+        savePadLayout()
+    }
+
+    /// 편집 중에 묶음을 (`dx`, `dy`)만큼 옮긴다.
+    func movePad(landscape: Bool, group: PadGroup, by delta: CGSize) {
+        var offsets = landscape ? padLayout.landscape : padLayout.portrait
+        let (dx, dy) = (Float(delta.width), Float(delta.height))
+        switch group {
+        case .dpad: offsets.dpadX += dx; offsets.dpadY += dy
+        case .buttons: offsets.buttonsX += dx; offsets.buttonsY += dy
+        case .select: offsets.selectX += dx; offsets.selectY += dy
+        case .start: offsets.startX += dx; offsets.startY += dy
+        }
+        if landscape { padLayout.landscape = offsets } else { padLayout.portrait = offsets }
+    }
+
+    /// 지금 방향(세로·가로)의 위치만 기본값으로 되돌린다.
+    func resetPadPositions(landscape: Bool) {
+        if landscape { padLayout.landscape = Self.noOffsets } else { padLayout.portrait = Self.noOffsets }
     }
 
     // MARK: 치트

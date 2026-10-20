@@ -47,7 +47,7 @@ impl DmgPalette {
 }
 
 /// 설정 파일의 `[video]` 섹션.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct VideoConfig {
     /// 모르는 이름(다음 버전에서 저장한 설정)이면 설정 전체를 버리지 않고 기본 팔레트를 쓴다.
@@ -57,6 +57,64 @@ pub struct VideoConfig {
     pub color_correction: bool,
     /// 픽셀 사이에 LCD 격자를 그린다 (앱이 그린다).
     pub lcd_grid: bool,
+    /// 슈퍼 게임보이를 지원하는 흑백 게임(포켓몬 레드·블루·옐로 등)에 게임이 정한 색을 입힌다.
+    /// 끄면 흑백 게임 색(`palette`)을 쓴다.
+    pub sgb_colors: bool,
+    /// 슈퍼 게임보이 테두리를 그린다. 화면이 256×224가 된다.
+    pub sgb_border: bool,
+}
+
+impl Default for VideoConfig {
+    fn default() -> Self {
+        Self {
+            palette: DmgPalette::default(),
+            color_correction: false,
+            lcd_grid: false,
+            sgb_colors: true,
+            sgb_border: true,
+        }
+    }
+}
+
+/// 앱이 그릴 화면 한 장.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Frame {
+    pub width: usize,
+    pub height: usize,
+    /// 0xRRGGBBAA
+    pub pixels: Vec<u32>,
+}
+
+impl Frame {
+    /// 테두리를 포함했는지 (LCD 격자는 테두리가 없을 때만 그린다).
+    pub fn has_border(&self) -> bool {
+        self.width != gb_core::ppu::SCREEN_WIDTH
+    }
+}
+
+/// 코어 화면에 필터와 슈퍼 게임보이 색·테두리를 적용한 화면.
+pub fn display(gb: &gb_core::GameBoy, video: &VideoConfig) -> Frame {
+    use gb_core::ppu::{SCREEN_HEIGHT, SCREEN_WIDTH};
+    let sgb = gb.sgb();
+    let game = match sgb {
+        Some(sgb) if video.sgb_colors => sgb.colorize(gb.framebuffer()),
+        _ => video.apply(gb.framebuffer(), gb.debug().cgb()),
+    };
+    match sgb
+        .filter(|_| video.sgb_border)
+        .and_then(|s| s.with_border(&game))
+    {
+        Some(pixels) => Frame {
+            width: gb_core::sgb::BORDER_WIDTH,
+            height: gb_core::sgb::BORDER_HEIGHT,
+            pixels,
+        },
+        None => Frame {
+            width: SCREEN_WIDTH,
+            height: SCREEN_HEIGHT,
+            pixels: game,
+        },
+    }
 }
 
 fn lenient_palette<'de, D: serde::Deserializer<'de>>(d: D) -> Result<DmgPalette, D::Error> {
@@ -156,5 +214,32 @@ mod tests {
             serde_json::from_str(r#"{"palette":"neon","lcd_grid":true}"#).unwrap();
         assert_eq!(config.palette, DmgPalette::Green, "모르는 팔레트");
         assert!(config.lcd_grid);
+        assert!(
+            config.sgb_colors && config.sgb_border,
+            "SGB는 기본으로 켠다"
+        );
+    }
+
+    #[test]
+    fn display_without_sgb_is_the_filtered_screen() {
+        let mut rom = vec![0u8; 0x8000];
+        rom[0x0100..0x0102].copy_from_slice(&[0x18, 0xFE]);
+        let gb = gb_core::GameBoy::new(rom.clone(), gb_core::Model::Auto).unwrap();
+        let frame = display(&gb, &VideoConfig::default());
+        assert_eq!((frame.width, frame.height), (160, 144));
+        assert!(!frame.has_border());
+
+        // SGB 게임이지만 아직 테두리를 받지 않았다: 160×144에 SGB 기본 색.
+        rom[0x0146] = 0x03;
+        rom[0x014B] = 0x33;
+        let gb = gb_core::GameBoy::new(rom, gb_core::Model::Auto).unwrap();
+        let frame = display(&gb, &VideoConfig::default());
+        assert_eq!(frame.width, 160);
+        assert_ne!(frame.pixels[0], DEFAULT_DMG_PALETTE[0], "SGB 색");
+        let off = VideoConfig {
+            sgb_colors: false,
+            ..VideoConfig::default()
+        };
+        assert_eq!(display(&gb, &off).pixels[0], DEFAULT_DMG_PALETTE[0]);
     }
 }

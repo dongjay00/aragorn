@@ -52,15 +52,17 @@ let mono = Font.system(.caption, design: .monospaced)
 struct LcdView: UIViewRepresentable {
     let emulator: Emulator
     var onFrame: () -> Void = {}
+    /// 화면 크기가 바뀌면 부른다 (슈퍼 게임보이 테두리를 그리면 256×224).
+    var onSize: (CGSize) -> Void = { _ in }
 
     func makeUIView(context: Context) -> LcdLayerView {
         let view = LcdLayerView()
-        view.start(emulator: emulator, onFrame: onFrame)
+        view.start(emulator: emulator, onFrame: onFrame, onSize: onSize)
         return view
     }
 
     func updateUIView(_ view: LcdLayerView, context: Context) {
-        view.start(emulator: emulator, onFrame: onFrame)
+        view.start(emulator: emulator, onFrame: onFrame, onSize: onSize)
     }
 
     static func dismantleUIView(_ view: LcdLayerView, coordinator: ()) {
@@ -71,9 +73,10 @@ struct LcdView: UIViewRepresentable {
 final class LcdLayerView: UIView {
     private var emulator: Emulator?
     private var onFrame: () -> Void = {}
+    private var onSize: (CGSize) -> Void = { _ in }
     private var link: CADisplayLink?
     private var shown = UInt64.max
-    private let size = screenSize()
+    private var size = CGSize(width: 160, height: 144)
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -84,8 +87,9 @@ final class LcdLayerView: UIView {
 
     required init?(coder: NSCoder) { fatalError("코드에서만 만든다") }
 
-    func start(emulator: Emulator, onFrame: @escaping () -> Void) {
+    func start(emulator: Emulator, onFrame: @escaping () -> Void, onSize: @escaping (CGSize) -> Void) {
         self.onFrame = onFrame
+        self.onSize = onSize
         if self.emulator !== emulator {
             self.emulator = emulator
             shown = .max
@@ -107,8 +111,14 @@ final class LcdLayerView: UIView {
         let number = emulator.frameNumber()
         if number != shown {
             shown = number
+            let frame = emulator.frame()
+            let frameSize = CGSize(width: Int(frame.width), height: Int(frame.height))
+            if frameSize != size {
+                size = frameSize
+                onSize(frameSize)
+            }
             layer.contents = makeCGImage(
-                width: Int(size.width), height: Int(size.height), rgba: emulator.frame(), opaque: true
+                width: Int(frame.width), height: Int(frame.height), rgba: frame.rgba, opaque: true
             )
         }
         onFrame()

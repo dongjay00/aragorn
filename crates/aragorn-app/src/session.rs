@@ -377,6 +377,11 @@ impl Session {
         self.gb.framebuffer()
     }
 
+    /// 앱이 그릴 화면: 화면 필터와 슈퍼 게임보이 색·테두리를 적용한다.
+    pub fn display(&self, video: &crate::video::VideoConfig) -> crate::video::Frame {
+        crate::video::display(&self.gb, video)
+    }
+
     /// 지금까지 만든 소리를 `sink`로 보내고, 장치 버퍼에 쌓인 양에 맞춰 다음 프레임부터 쓸
     /// 샘플레이트를 보정한다. `advance` 뒤에 부른다.
     pub fn pump_audio(&mut self, sink: &mut dyn AudioSink) {

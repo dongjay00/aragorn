@@ -257,9 +257,8 @@ impl AragornApp {
                     self.flow.current(),
                     session.title()
                 )));
-                self.screen
-                    .set_video(self.config.video, session.debug().cgb());
-                self.screen.update(ctx, session.framebuffer());
+                self.screen.set_video(self.config.video);
+                self.screen.update(ctx, &session);
                 self.remember_recent(path, session.title());
                 self.notice = Some(format!("{} 실행 중", session.title()));
                 // 일시정지한 채 다른 게임을 열어도 바로 시작한다.
@@ -279,7 +278,7 @@ impl AragornApp {
                                 "{} — 지난번에 닫은 자리에서 이어서 합니다",
                                 session.title()
                             ));
-                            self.screen.update(ctx, session.framebuffer());
+                            self.screen.update(ctx, &session);
                         }
                         Ok(false) => {}
                         Err(message) => {
@@ -331,14 +330,11 @@ impl AragornApp {
         let Some(session) = &self.session else {
             return;
         };
-        let pixels = self
-            .config
-            .video
-            .apply(session.framebuffer(), session.debug().cgb());
+        let frame = session.display(&self.config.video);
         let png = aragorn_app::screenshot::png(
-            &pixels,
-            gb_core::ppu::SCREEN_WIDTH,
-            gb_core::ppu::SCREEN_HEIGHT,
+            &frame.pixels,
+            frame.width,
+            frame.height,
             aragorn_app::screenshot::SCALE,
         );
         let dir = screenshot_dir(self.rom_path.as_deref());
@@ -400,9 +396,8 @@ impl AragornApp {
     fn apply_play_settings(&mut self, ctx: &egui::Context) {
         if let Some(session) = &mut self.session {
             session.set_rewind_enabled(self.config.rewind.enabled);
-            self.screen
-                .set_video(self.config.video, session.debug().cgb());
-            self.screen.update(ctx, session.framebuffer());
+            self.screen.set_video(self.config.video);
+            self.screen.update(ctx, session);
         }
     }
 
@@ -466,7 +461,7 @@ impl AragornApp {
                     .map(|()| format!("슬롯 {}에 저장했습니다", slot + 1))
             }
             SlotCommand::Load(slot) => session.load_state(slot).map(|()| {
-                self.screen.update(ctx, session.framebuffer());
+                self.screen.update(ctx, session);
                 format!("슬롯 {}을(를) 불러왔습니다", slot + 1)
             }),
         };
@@ -503,7 +498,7 @@ impl AragornApp {
                 } else {
                     session.step_frame();
                 }
-                self.screen.update(ctx, session.framebuffer());
+                self.screen.update(ctx, session);
             }
             DebugCommand::SetBreakpoints(pcs) => session.set_breakpoints(&pcs),
             DebugCommand::SetChannelMuted(..) => unreachable!("위에서 처리한다"),
@@ -562,7 +557,7 @@ impl AragornApp {
         let started = Instant::now();
         let mut within_budget = || started.elapsed() < UNLIMITED_BUDGET;
         if session.run(elapsed, self.mode, &mut within_budget) > 0 {
-            self.screen.update(ctx, session.framebuffer());
+            self.screen.update(ctx, session);
         }
         if let Some(pc) = session.take_breakpoint_stop() {
             self.speed.pause();

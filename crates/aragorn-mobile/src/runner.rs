@@ -3,11 +3,11 @@
 //! `Session`과 오디오 스트림은 스레드 사이로 옮길 수 없어서 이 스레드 안에서 만든다. 앱의 요청은
 //! 이 스레드에서 `State`를 받아 실행하는 함수로 온다.
 
-use crate::types::rgba_bytes;
+use crate::types::Image;
 use aragorn_app::{
     pacing::{BaseSpeed, FastForward, RunMode, SpeedControl, UNLIMITED_BUDGET},
     session::Session,
-    video::VideoConfig,
+    video::{Frame, VideoConfig},
 };
 use aragorn_host::{CpalAudio, FsSaveStore, SystemClock};
 use std::{
@@ -67,7 +67,7 @@ impl State {
 
     /// 지금 화면에 필터를 적용해 앱에 보인다.
     pub fn publish(&self) {
-        self.screen.publish(&self.filtered_frame());
+        self.screen.publish(&self.display());
     }
 
     pub fn notice(&self, message: String) {
@@ -83,10 +83,9 @@ impl State {
         }
     }
 
-    /// 필터를 적용한 지금 화면.
-    pub fn filtered_frame(&self) -> Vec<u32> {
-        self.video
-            .apply(self.session.framebuffer(), self.session.debug().cgb())
+    /// 필터와 슈퍼 게임보이 색·테두리를 적용한 지금 화면.
+    pub fn display(&self) -> Frame {
+        self.session.display(&self.video)
     }
 
     /// 앱이 읽을 실행 상태를 갱신한다.
@@ -105,7 +104,7 @@ impl State {
 #[derive(Default)]
 pub struct Screen {
     number: AtomicU64,
-    rgba: Mutex<Vec<u8>>,
+    image: Mutex<Option<Image>>,
     notices: Mutex<Vec<String>>,
     /// (사용자 일시정지, 실행 배율 문구). 앱이 매 프레임 읽어도 에뮬레이터 스레드를 기다리지 않게 둔다.
     status: Mutex<(bool, String)>,
@@ -116,11 +115,16 @@ impl Screen {
         self.number.load(Ordering::Acquire)
     }
 
-    pub fn frame(&self) -> Vec<u8> {
-        self.rgba
+    /// 마지막 화면. 아직 그리지 않았으면 검은 160×144.
+    pub fn frame(&self) -> Image {
+        self.image
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .clone()
+            .unwrap_or_else(|| {
+                let (w, h) = (crate::SCREEN_WIDTH as usize, crate::SCREEN_HEIGHT as usize);
+                Image::from_pixels(w, h, &vec![0x0000_00FF; w * h])
+            })
     }
 
     pub fn take_notices(&self) -> Vec<String> {
@@ -141,8 +145,9 @@ impl Screen {
         }
     }
 
-    fn publish(&self, framebuffer: &[u32]) {
-        *self.rgba.lock().unwrap_or_else(PoisonError::into_inner) = rgba_bytes(framebuffer);
+    fn publish(&self, frame: &Frame) {
+        let image = Image::from_pixels(frame.width, frame.height, &frame.pixels);
+        *self.image.lock().unwrap_or_else(PoisonError::into_inner) = Some(image);
         self.number.fetch_add(1, Ordering::Release);
     }
 

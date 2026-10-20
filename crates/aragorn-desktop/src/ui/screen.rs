@@ -1,6 +1,6 @@
-//! 에뮬레이터 화면: 프레임버퍼에 화면 필터를 적용해 egui 텍스처로 올리고 정수 배율로 그린다.
+//! 에뮬레이터 화면: 화면 필터와 슈퍼 게임보이 색·테두리를 적용해 egui 텍스처로 올리고 정수 배율로 그린다.
 
-use aragorn_app::video::VideoConfig;
+use aragorn_app::{session::Session, video::VideoConfig};
 use eframe::egui;
 use gb_core::ppu::{SCREEN_HEIGHT, SCREEN_WIDTH};
 
@@ -9,10 +9,10 @@ pub fn to_rgba(framebuffer: &[u32]) -> Vec<u8> {
     framebuffer.iter().flat_map(|p| p.to_be_bytes()).collect()
 }
 
-/// 주어진 영역에 들어가는 가장 큰 정수 배율 (최소 1).
-pub fn integer_scale(available: egui::Vec2) -> f32 {
-    let sx = (available.x / SCREEN_WIDTH as f32).floor();
-    let sy = (available.y / SCREEN_HEIGHT as f32).floor();
+/// `size` 크기 화면이 주어진 영역에 들어가는 가장 큰 정수 배율 (최소 1).
+pub fn integer_scale(available: egui::Vec2, size: [usize; 2]) -> f32 {
+    let sx = (available.x / size[0] as f32).floor();
+    let sy = (available.y / size[1] as f32).floor();
     sx.min(sy).max(1.0)
 }
 
@@ -23,23 +23,20 @@ pub const GRID_MIN_SCALE: f32 = 3.0;
 pub struct ScreenView {
     texture: Option<egui::TextureHandle>,
     video: VideoConfig,
-    /// 게임이 컬러로 그리는지. 필터가 다르다.
-    cgb: bool,
+    /// 마지막으로 올린 화면 크기. 슈퍼 게임보이 테두리가 있으면 256×224다.
+    size: [usize; 2],
 }
 
 impl ScreenView {
     /// 화면 필터를 바꾼다. 다음 `update`부터 적용한다.
-    pub fn set_video(&mut self, video: VideoConfig, cgb: bool) {
+    pub fn set_video(&mut self, video: VideoConfig) {
         self.video = video;
-        self.cgb = cgb;
     }
 
-    pub fn update(&mut self, ctx: &egui::Context, framebuffer: &[u32]) {
-        let filtered = self.video.apply(framebuffer, self.cgb);
-        let image = egui::ColorImage::from_rgba_unmultiplied(
-            [SCREEN_WIDTH, SCREEN_HEIGHT],
-            &to_rgba(&filtered),
-        );
+    pub fn update(&mut self, ctx: &egui::Context, session: &Session) {
+        let frame = session.display(&self.video);
+        self.size = [frame.width, frame.height];
+        let image = egui::ColorImage::from_rgba_unmultiplied(self.size, &to_rgba(&frame.pixels));
         match &mut self.texture {
             Some(texture) => texture.set(image, egui::TextureOptions::NEAREST),
             None => {
@@ -53,9 +50,12 @@ impl ScreenView {
         let Some(texture) = &self.texture else {
             return;
         };
-        let scale = integer_scale(ui.available_size());
-        let size = egui::vec2(SCREEN_WIDTH as f32, SCREEN_HEIGHT as f32) * scale;
-        let grid = self.video.lcd_grid && scale >= GRID_MIN_SCALE;
+        let scale = integer_scale(ui.available_size(), self.size);
+        let size = egui::vec2(self.size[0] as f32, self.size[1] as f32) * scale;
+        // 테두리가 있으면 격자를 그리지 않는다 (게임 화면만 LCD다).
+        let grid = self.video.lcd_grid
+            && scale >= GRID_MIN_SCALE
+            && self.size == [SCREEN_WIDTH, SCREEN_HEIGHT];
         ui.centered_and_justified(|ui| {
             let response = ui.add(egui::Image::new((texture.id(), size)));
             if grid {
@@ -92,8 +92,10 @@ mod tests {
 
     #[test]
     fn scale_is_largest_integer_that_fits() {
-        assert_eq!(integer_scale(egui::vec2(640.0, 576.0)), 4.0);
-        assert_eq!(integer_scale(egui::vec2(500.0, 1000.0)), 3.0);
-        assert_eq!(integer_scale(egui::vec2(100.0, 100.0)), 1.0);
+        let gb = [SCREEN_WIDTH, SCREEN_HEIGHT];
+        assert_eq!(integer_scale(egui::vec2(640.0, 576.0), gb), 4.0);
+        assert_eq!(integer_scale(egui::vec2(500.0, 1000.0), gb), 3.0);
+        assert_eq!(integer_scale(egui::vec2(100.0, 100.0), gb), 1.0);
+        assert_eq!(integer_scale(egui::vec2(640.0, 576.0), [256, 224]), 2.0);
     }
 }

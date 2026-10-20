@@ -1,7 +1,9 @@
 package io.github.dongjay00.aragorn.ui
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.waitForUpOrCancellation
@@ -16,6 +18,7 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.size
@@ -45,6 +48,7 @@ import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.positionChange
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
@@ -53,6 +57,7 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.github.dongjay00.aragorn.GameViewModel
 import io.github.dongjay00.aragorn.Page
+import io.github.dongjay00.aragorn.PadGroup
 import io.github.dongjay00.aragorn.core.GbButton
 import io.github.dongjay00.aragorn.core.PadLayout
 import io.github.dongjay00.aragorn.core.RecentRom
@@ -62,6 +67,7 @@ private val Body = Color(0xFF1E1E24)
 private val KeyColor = Color(0xFF3A3A44)
 private val KeyPressed = Color(0xFF5A5A68)
 private val ActionColor = Color(0xFF8B2252)
+private val EditColor = Color(0xFFFFD54F)
 /** 가상 패드를 누를 때 햅틱을 낼지 (설정의 "버튼 햅틱"). */
 private val LocalPadHaptics = compositionLocalOf { true }
 /** 가상 패드 버튼 크기 배율 (설정의 "가상 패드"). */
@@ -93,8 +99,20 @@ fun GameScreen(viewModel: GameViewModel, onOpenRom: () -> Unit) {
     val video by viewModel.video.collectAsStateWithLifecycle()
     val recent by viewModel.recent.collectAsStateWithLifecycle()
     val rewindEnabled by viewModel.rewindEnabled.collectAsStateWithLifecycle()
+    val editing by viewModel.editingPad.collectAsStateWithLifecycle()
     var slotsOpen by remember { mutableStateOf(false) }
 
+    val editBar = @Composable { landscape: Boolean ->
+        Row(Modifier.fillMaxWidth().padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                "버튼 묶음을 끌어 옮기세요",
+                color = Color.White,
+                modifier = Modifier.weight(1f).padding(start = 12.dp),
+            )
+            TextButton(onClick = { viewModel.resetPadPositions(landscape) }) { Text("초기화") }
+            TextButton(onClick = viewModel::finishPadEdit) { Text("완료") }
+        }
+    }
     val toolbar = @Composable {
         Toolbar(
             hasGame = emulator != null,
@@ -114,6 +132,7 @@ fun GameScreen(viewModel: GameViewModel, onOpenRom: () -> Unit) {
             onCheats = { viewModel.showPage(Page.CHEATS) },
             onScreenshot = viewModel::saveScreenshot,
             onRestart = viewModel::restart,
+            onEditPad = viewModel::startPadEdit,
             onCheckUpdate = { viewModel.checkForUpdate(manual = true) },
         )
     }
@@ -140,7 +159,6 @@ fun GameScreen(viewModel: GameViewModel, onOpenRom: () -> Unit) {
     }
 
     val lift = MAX_LIFT * pad.lift
-    val padAlpha = Modifier.alpha(pad.opacity)
     val actions = @Composable { ActionButtons(viewModel, rewindEnabled) }
     BoxWithConstraints(Modifier.fillMaxSize().background(Body).safeDrawingPadding()) {
         val landscape = maxWidth > maxHeight
@@ -159,29 +177,43 @@ fun GameScreen(viewModel: GameViewModel, onOpenRom: () -> Unit) {
             LocalPadHaptics provides haptics,
             LocalPadScale provides minOf(pad.scale, maxOf(fit, 0.5f)),
         ) {
+            val offsets = if (landscape) pad.landscape else pad.portrait
+            val movable = @Composable { group: PadGroup, content: @Composable () -> Unit ->
+                val (x, y) = when (group) {
+                    PadGroup.DPAD -> offsets.dpadX to offsets.dpadY
+                    PadGroup.BUTTONS -> offsets.buttonsX to offsets.buttonsY
+                    PadGroup.SELECT -> offsets.selectX to offsets.selectY
+                    PadGroup.START -> offsets.startX to offsets.startY
+                }
+                Movable(x, y, pad.opacity, editing, onDrag = { dx, dy -> viewModel.movePad(landscape, group, dx, dy) }, content)
+            }
             if (landscape) {
                 Column(Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
-                    toolbar()
+                    if (editing) editBar(true) else toolbar()
                     Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
                         Column(
-                            Modifier.weight(1f).fillMaxHeight().padding(bottom = lift).then(padAlpha),
+                            Modifier.weight(1f).fillMaxHeight().padding(bottom = lift),
                             verticalArrangement = Arrangement.SpaceEvenly,
                             horizontalAlignment = Alignment.CenterHorizontally,
                         ) {
-                            DPad(viewModel::setButton)
-                            PadButton("SELECT", GbButton.SELECT, viewModel::setButton, PillShape, 72.dp, 28.dp)
+                            movable(PadGroup.DPAD) { DPad(viewModel::setButton) }
+                            movable(PadGroup.SELECT) {
+                                PadButton("SELECT", GbButton.SELECT, viewModel::setButton, PillShape, 72.dp, 28.dp)
+                            }
                         }
                         Column(Modifier.width(lcdWidth).fillMaxHeight(), horizontalAlignment = Alignment.CenterHorizontally) {
                             screen(Modifier.fillMaxWidth())
                             status()
                         }
                         Column(
-                            Modifier.weight(1f).fillMaxHeight().padding(bottom = lift).then(padAlpha),
+                            Modifier.weight(1f).fillMaxHeight().padding(bottom = lift),
                             verticalArrangement = Arrangement.SpaceEvenly,
                             horizontalAlignment = Alignment.CenterHorizontally,
                         ) {
-                            actions()
-                            PadButton("START", GbButton.START, viewModel::setButton, PillShape, 72.dp, 28.dp)
+                            movable(PadGroup.BUTTONS) { actions() }
+                            movable(PadGroup.START) {
+                                PadButton("START", GbButton.START, viewModel::setButton, PillShape, 72.dp, 28.dp)
+                            }
                         }
                     }
                 }
@@ -190,23 +222,27 @@ fun GameScreen(viewModel: GameViewModel, onOpenRom: () -> Unit) {
                     Modifier.fillMaxSize().padding(horizontal = 16.dp),
                     horizontalAlignment = Alignment.CenterHorizontally,
                 ) {
-                    toolbar()
+                    if (editing) editBar(false) else toolbar()
                     screen(Modifier.fillMaxWidth())
                     status()
                     Spacer(Modifier.weight(1f))
                     Row(
-                        Modifier.fillMaxWidth().then(padAlpha),
+                        Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        DPad(viewModel::setButton)
-                        actions()
+                        movable(PadGroup.DPAD) { DPad(viewModel::setButton) }
+                        movable(PadGroup.BUTTONS) { actions() }
                     }
                     Spacer(Modifier.height(24.dp))
-                    Row(Modifier.padding(bottom = 24.dp + lift).then(padAlpha)) {
-                        PadButton("SELECT", GbButton.SELECT, viewModel::setButton, PillShape, 72.dp, 28.dp)
+                    Row(Modifier.padding(bottom = 24.dp + lift)) {
+                        movable(PadGroup.SELECT) {
+                            PadButton("SELECT", GbButton.SELECT, viewModel::setButton, PillShape, 72.dp, 28.dp)
+                        }
                         Spacer(Modifier.width(16.dp))
-                        PadButton("START", GbButton.START, viewModel::setButton, PillShape, 72.dp, 28.dp)
+                        movable(PadGroup.START) {
+                            PadButton("START", GbButton.START, viewModel::setButton, PillShape, 72.dp, 28.dp)
+                        }
                     }
                 }
             }
@@ -216,6 +252,40 @@ fun GameScreen(viewModel: GameViewModel, onOpenRom: () -> Unit) {
 
     if (slotsOpen) {
         SlotsSheet(viewModel, onDismiss = { slotsOpen = false })
+    }
+}
+
+/**
+ * 기본 자리에서 (`x`, `y`) dp만큼 옮겨 그린 버튼 묶음. 편집 중에는 위에 덮개를 씌워 버튼 대신 끌기를 받는다.
+ */
+@Composable
+private fun Movable(
+    x: Float,
+    y: Float,
+    opacity: Float,
+    editing: Boolean,
+    onDrag: (Float, Float) -> Unit,
+    content: @Composable () -> Unit,
+) {
+    val density = LocalDensity.current.density
+    val drag by rememberUpdatedState(onDrag)
+    // 불투명도는 묶음마다 준다. 큰 묶음에 주면 그 경계 밖으로 옮긴 버튼이 잘린다.
+    Box(Modifier.offset(x.dp, y.dp)) {
+        Box(Modifier.alpha(opacity)) { content() }
+        if (editing) {
+            Box(
+                Modifier
+                    .matchParentSize()
+                    .border(2.dp, EditColor, KeyShape)
+                    .background(EditColor.copy(alpha = 0.15f), KeyShape)
+                    .pointerInput(Unit) {
+                        detectDragGestures { change, amount ->
+                            change.consume()
+                            drag(amount.x / density, amount.y / density)
+                        }
+                    },
+            )
+        }
     }
 }
 
@@ -270,6 +340,7 @@ private fun Toolbar(
     onCheats: () -> Unit,
     onScreenshot: () -> Unit,
     onRestart: () -> Unit,
+    onEditPad: () -> Unit,
     onCheckUpdate: () -> Unit,
 ) {
     var menuOpen by remember { mutableStateOf(false) }
@@ -309,6 +380,10 @@ private fun Toolbar(
                     text = { Text("처음부터 다시 시작") },
                     enabled = hasGame,
                     onClick = { menuOpen = false; onRestart() },
+                )
+                DropdownMenuItem(
+                    text = { Text("패드 위치 편집") },
+                    onClick = { menuOpen = false; onEditPad() },
                 )
                 DropdownMenuItem(
                     text = { Text("치트") },

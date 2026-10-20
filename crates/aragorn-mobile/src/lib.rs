@@ -16,7 +16,7 @@ mod update;
 pub use debug::{
     CpuView, DisasmLine, IoGroup, IoRow, MapView, PaletteGroup, PaletteRow, SpriteView, Swatch,
 };
-pub use settings::{PadLayout, RecentRom, Settings};
+pub use settings::{PadLayout, PadOffsets, RecentRom, Settings};
 pub use types::{
     FastSpeed, GbButton, Image, InputAction, InputDevice, Palette, Speed, VideoSettings,
 };
@@ -134,8 +134,8 @@ impl Emulator {
         self.screen.frame_number()
     }
 
-    /// 마지막으로 그린 프레임. `SCREEN_WIDTH`×`SCREEN_HEIGHT` 픽셀의 RGBA 바이트다.
-    pub fn frame(&self) -> Vec<u8> {
+    /// 마지막으로 그린 화면. 보통 160×144이고, 슈퍼 게임보이 테두리를 그리면 256×224다.
+    pub fn frame(&self) -> Image {
         self.screen.frame()
     }
 
@@ -187,13 +187,14 @@ impl Emulator {
         .map_err(|reason| EmulatorError::State { reason })
     }
 
-    /// 지금 화면(필터 적용)을 3배로 키운 PNG.
+    /// 지금 화면(필터, 테두리 적용)을 3배로 키운 PNG.
     pub fn screenshot(&self) -> Result<Vec<u8>, EmulatorError> {
         self.call(|state| {
+            let frame = state.display();
             aragorn_app::screenshot::png(
-                &state.filtered_frame(),
-                SCREEN_WIDTH as usize,
-                SCREEN_HEIGHT as usize,
+                &frame.pixels,
+                frame.width,
+                frame.height,
                 aragorn_app::screenshot::SCALE,
             )
         })
@@ -569,8 +570,10 @@ mod tests {
         let emulator = start(&dir);
         assert_eq!(emulator.title(), "ARAGORN TEST");
         wait_for_frames(&emulator, 3);
+        let frame = emulator.frame();
+        assert_eq!((frame.width, frame.height), (SCREEN_WIDTH, SCREEN_HEIGHT));
         assert_eq!(
-            emulator.frame().len(),
+            frame.rgba.len(),
             (SCREEN_WIDTH * SCREEN_HEIGHT * 4) as usize
         );
     }
@@ -726,11 +729,13 @@ mod tests {
             palette: Palette::Gray,
             color_correction: false,
             lcd_grid: false,
+            sgb_colors: true,
+            sgb_border: true,
         });
         wait_for_frames(&emulator, number + 1);
         let after = emulator.frame();
         assert_ne!(before, after);
-        assert_eq!(&after[..4], &[0xFF, 0xFF, 0xFF, 0xFF], "흰색 배경");
+        assert_eq!(&after.rgba[..4], &[0xFF, 0xFF, 0xFF, 0xFF], "흰색 배경");
     }
 
     #[test]

@@ -118,6 +118,15 @@ impl SettingsView {
                 changed |= ui
                     .checkbox(&mut config.video.lcd_grid, "LCD 격자 (3배 이상으로 그릴 때)")
                     .changed();
+                changed |= ui
+                    .checkbox(
+                        &mut config.video.sgb_colors,
+                        "슈퍼 게임보이 색 (포켓몬 레드·블루·옐로 등 SGB 지원 게임)",
+                    )
+                    .changed();
+                changed |= ui
+                    .checkbox(&mut config.video.sgb_border, "슈퍼 게임보이 테두리")
+                    .changed();
                 ui.separator();
                 ui.strong("되감기");
                 changed |= ui

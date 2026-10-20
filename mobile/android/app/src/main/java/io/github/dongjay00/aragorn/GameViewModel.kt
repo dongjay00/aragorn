@@ -21,6 +21,7 @@ import io.github.dongjay00.aragorn.core.GbButton
 import io.github.dongjay00.aragorn.core.InputAction
 import io.github.dongjay00.aragorn.core.InputDevice
 import io.github.dongjay00.aragorn.core.PadLayout
+import io.github.dongjay00.aragorn.core.PadOffsets
 import io.github.dongjay00.aragorn.core.RecentRom
 import io.github.dongjay00.aragorn.core.Settings
 import io.github.dongjay00.aragorn.core.SlotSummary
@@ -37,6 +38,9 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
+
+/** 위치를 옮길 수 있는 가상 패드 묶음. */
+enum class PadGroup { DPAD, BUTTONS, SELECT, START }
 
 /** 앱 화면. 뒤로 가기는 게임 화면으로 돌아온다. */
 enum class Page { GAME, SETTINGS, DEBUGGER, CHEATS }
@@ -92,6 +96,10 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     private val _padLayout = MutableStateFlow(settings.padLayout())
     /** 가상 패드 크기·투명도·높이. */
     val padLayout: StateFlow<PadLayout> = _padLayout.asStateFlow()
+
+    private val _editingPad = MutableStateFlow(false)
+    /** 가상 패드 위치 편집 중인지. 편집 중에는 패드를 눌러도 게임에 보내지 않는다. */
+    val editingPad: StateFlow<Boolean> = _editingPad.asStateFlow()
 
     private val _recent = MutableStateFlow(settings.recentGames())
     /** 최근에 연 게임, 최근 것부터. */
@@ -466,8 +474,40 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun resetPadLayout() {
-        _padLayout.value = PadLayout(scale = 1f, opacity = 1f, lift = 0f)
+        _padLayout.value = PadLayout(1f, 1f, 0f, NO_OFFSETS, NO_OFFSETS)
         savePadLayout()
+    }
+
+    /** 게임 화면에서 버튼 묶음을 끌어 옮긴다. 끝내면 [finishPadEdit]. */
+    fun startPadEdit() {
+        _page.value = Page.GAME
+        _editingPad.value = true
+    }
+
+    fun finishPadEdit() {
+        _editingPad.value = false
+        savePadLayout()
+    }
+
+    /** 편집 중에 묶음을 (`dx`, `dy`) dp만큼 옮긴다. */
+    fun movePad(landscape: Boolean, group: PadGroup, dx: Float, dy: Float) {
+        _padLayout.update { layout ->
+            val o = if (landscape) layout.landscape else layout.portrait
+            val moved = when (group) {
+                PadGroup.DPAD -> o.copy(dpadX = o.dpadX + dx, dpadY = o.dpadY + dy)
+                PadGroup.BUTTONS -> o.copy(buttonsX = o.buttonsX + dx, buttonsY = o.buttonsY + dy)
+                PadGroup.SELECT -> o.copy(selectX = o.selectX + dx, selectY = o.selectY + dy)
+                PadGroup.START -> o.copy(startX = o.startX + dx, startY = o.startY + dy)
+            }
+            if (landscape) layout.copy(landscape = moved) else layout.copy(portrait = moved)
+        }
+    }
+
+    /** 지금 방향(세로·가로)의 위치만 기본값으로 되돌린다. */
+    fun resetPadPositions(landscape: Boolean) {
+        _padLayout.update {
+            if (landscape) it.copy(landscape = NO_OFFSETS) else it.copy(portrait = NO_OFFSETS)
+        }
     }
 
     // ---- 치트 ----
@@ -672,6 +712,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
 
     private companion object {
         const val RECHECK_INTERVAL_MS = 6 * 60 * 60 * 1000L
+        val NO_OFFSETS = PadOffsets(0f, 0f, 0f, 0f, 0f, 0f, 0f, 0f)
     }
 }
 

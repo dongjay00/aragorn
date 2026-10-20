@@ -265,6 +265,10 @@ pub struct VideoSettings {
     /// 컬러 게임 색 보정
     pub color_correction: bool,
     pub lcd_grid: bool,
+    /// 슈퍼 게임보이 지원 게임에 게임이 정한 색을 입힌다.
+    pub sgb_colors: bool,
+    /// 슈퍼 게임보이 테두리. 화면이 256×224가 된다.
+    pub sgb_border: bool,
 }
 
 impl From<VideoSettings> for VideoConfig {
@@ -273,6 +277,8 @@ impl From<VideoSettings> for VideoConfig {
             palette: video.palette.into(),
             color_correction: video.color_correction,
             lcd_grid: video.lcd_grid,
+            sgb_colors: video.sgb_colors,
+            sgb_border: video.sgb_border,
         }
     }
 }
@@ -283,6 +289,8 @@ impl From<VideoConfig> for VideoSettings {
             palette: video.palette.into(),
             color_correction: video.color_correction,
             lcd_grid: video.lcd_grid,
+            sgb_colors: video.sgb_colors,
+            sgb_border: video.sgb_border,
         }
     }
 }

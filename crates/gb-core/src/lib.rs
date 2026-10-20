@@ -15,6 +15,7 @@ mod model;
 pub mod ppu;
 pub mod rtc;
 pub mod serial;
+pub mod sgb;
 pub mod state;
 pub mod timer;
 
