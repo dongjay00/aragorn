@@ -46,6 +46,8 @@ pub struct State {
     pub screen: Arc<Screen>,
     /// 화면 필터 (팔레트, 색 보정).
     pub video: VideoConfig,
+    /// 백그라운드로 가거나 끝날 때 이어하기를 남긴다.
+    pub auto_resume: bool,
 }
 
 impl State {
@@ -65,13 +67,26 @@ impl State {
 
     /// 지금 화면에 필터를 적용해 앱에 보인다.
     pub fn publish(&self) {
-        let cgb = self.session.debug().cgb();
-        self.screen
-            .publish(&self.video.apply(self.session.framebuffer(), cgb));
+        self.screen.publish(&self.filtered_frame());
     }
 
     pub fn notice(&self, message: String) {
         self.screen.notice(message);
+    }
+
+    /// 켜져 있으면 이어하기를 남긴다. 실패하면 안내 문구로 알린다.
+    pub fn save_resume_if_enabled(&mut self) {
+        if self.auto_resume
+            && let Err(message) = self.session.save_resume()
+        {
+            self.notice(message);
+        }
+    }
+
+    /// 필터를 적용한 지금 화면.
+    pub fn filtered_frame(&self) -> Vec<u32> {
+        self.video
+            .apply(self.session.framebuffer(), self.session.debug().cgb())
     }
 
     /// 앱이 읽을 실행 상태를 갱신한다.
@@ -176,6 +191,7 @@ pub fn run(
         fast_forward: FastForward::default(),
         screen,
         video: VideoConfig::default(),
+        auto_resume: false,
     };
     state.publish();
     state.update_status();
@@ -227,5 +243,6 @@ pub fn run(
         state.screen.report(&mut state.session);
     }
     state.session.flush();
+    state.save_resume_if_enabled();
     state.screen.report(&mut state.session);
 }

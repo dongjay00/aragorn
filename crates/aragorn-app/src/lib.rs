@@ -8,6 +8,7 @@ pub mod input;
 pub mod pacing;
 pub mod recent;
 pub mod rewind;
+pub mod screenshot;
 pub mod session;
 pub mod update;
 pub mod video;

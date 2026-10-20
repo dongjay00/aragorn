@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import Photos
 
 /// 앱 화면. 닫으면 게임 화면으로 돌아온다.
 enum Page { case game, settings, debugger, cheats }
@@ -43,6 +44,8 @@ final class GameModel {
     /// 화면 필터 (팔레트, 색 보정, LCD 격자).
     private(set) var video: VideoSettings
     private(set) var rewindEnabled: Bool
+    /// 게임을 닫을 때의 자리에서 이어서 할지.
+    private(set) var autoResume: Bool
     /// 가상 패드 크기·불투명도·높이.
     var padLayout: PadLayout
     /// 최근에 연 게임, 최근 것부터.
@@ -70,6 +73,8 @@ final class GameModel {
     @ObservationIgnored private var visible = false
     @ObservationIgnored private var fastTouch = false
     @ObservationIgnored private var fastKey = false
+    /// 지금 게임의 ROM 파일 ("처음부터 다시 시작"에 쓴다).
+    @ObservationIgnored private var currentRom: URL?
     @ObservationIgnored private var rewindTouch = false
     @ObservationIgnored private var rewindKey = false
     @ObservationIgnored private var lastAutoCheck: Date?
@@ -90,6 +95,7 @@ final class GameModel {
         fastSpeed = settings.fastSpeed()
         video = settings.video()
         rewindEnabled = settings.rewindEnabled()
+        autoResume = settings.autoResume()
         padLayout = settings.padLayout()
         // 지운 ROM이나 예전 앱 폴더를 가리키는 항목은 뺀다.
         for game in settings.recentGames()
@@ -184,25 +190,48 @@ final class GameModel {
         path.hasPrefix("/") ? URL(filePath: path) : URL.documentsDirectory.appending(path: path)
     }
 
+    /// 지금 게임을 이어하기 없이 게임 세이브에서 다시 시작한다.
+    func restart() {
+        guard let file = currentRom else { return }
+        startGame(resume: false) { (try Data(contentsOf: file), file) }
+    }
+
     /// `load`가 읽은 ROM으로 게임을 시작하고 최근 목록 맨 앞에 넣는다.
-    private func startGame(_ load: @escaping @Sendable () throws -> (Data, URL)) {
+    /// `resume`이면 이어하기를 켰을 때 지난번에 닫은 자리에서 이어서 한다.
+    private func startGame(resume: Bool = true, _ load: @escaping @Sendable () throws -> (Data, URL)) {
         let previous = emulator
+        let useResume = resume && autoResume
         Task {
             do {
-                let (emulator, file) = try await Task.detached {
+                let (emulator, file, resumed) = try await Task.detached {
                     let (rom, file) = try load()
-                    // 같은 ROM을 다시 열면 새 세션이 세이브를 읽기 전에 지금 진행을 저장해 둔다.
-                    _ = previous?.flush()
+                    // 지금 게임은 닫히면서 이어하기를 다시 남기지 않게 한다. 새 세션이 이어하기를 읽은 뒤에
+                    // 덮어쓰면 안 된다. 다른 게임으로 바꿀 때는 지금 자리를 먼저 남긴다.
+                    if let previous {
+                        previous.setAutoResume(on: false)
+                        if useResume { try? previous.saveResume() }
+                        // 같은 ROM을 다시 열면 새 세션이 세이브를 읽기 전에 지금 진행을 저장해 둔다.
+                        _ = previous.flush()
+                    }
                     let savePath = Self.savesDirectory.appending(path: file.lastPathComponent).path
-                    return (try Emulator(rom: rom, savePath: savePath), file)
+                    let emulator = try Emulator(rom: rom, savePath: savePath)
+                    let resumed: Result<Bool, Error> = useResume
+                        ? Result { try emulator.resume() }
+                        : .success(false)
+                    return (emulator, file, resumed)
                 }.value
                 previous?.stop()
                 configure(emulator)
                 self.emulator = emulator
                 // 헤더에 제목이 없는 ROM(테스트 ROM 등)은 파일 이름을 보인다.
+                currentRom = file
                 let name = file.lastPathComponent
                 let title = emulator.title().isEmpty ? name : emulator.title()
-                notice = "\(title) 실행 중"
+                switch resumed {
+                case .success(true): notice = "\(title) — 지난번에 닫은 자리에서 이어서 합니다"
+                case .success(false): notice = "\(title) 실행 중"
+                case let .failure(error): notice = Self.message(error) ?? "\(title) 실행 중"
+                }
                 saveSetting { try self.settings.addRecent(path: Self.recentPath(file), title: title) }
                 recent = settings.recentGames()
                 cheats = emulator.cheats()
@@ -220,6 +249,7 @@ final class GameModel {
         emulator.setFastHeld(held: fastTouch || fastKey)
         emulator.setRewindHeld(held: rewindTouch || rewindKey)
         emulator.setRewindEnabled(enabled: rewindEnabled)
+        emulator.setAutoResume(on: autoResume)
         emulator.setVideo(video: video)
         emulator.setBreakpoints(pcs: breakpoints)
         for (channel, muted) in channelMuted.enumerated() {
@@ -331,6 +361,32 @@ final class GameModel {
         video = value
         emulator?.setVideo(video: value)
         saveSetting { try self.settings.setVideo(video: value) }
+    }
+
+    func setAutoResume(_ value: Bool) {
+        autoResume = value
+        emulator?.setAutoResume(on: value)
+        saveSetting { try self.settings.setAutoResume(on: value) }
+    }
+
+    /// 지금 화면을 사진 앱에 저장한다. 처음에는 사진 추가 권한을 묻는다.
+    func saveScreenshot() {
+        guard let emulator else { return }
+        Task {
+            do {
+                let png = try await Task.detached { try emulator.screenshot() }.value
+                guard await PHPhotoLibrary.requestAuthorization(for: .addOnly) == .authorized else {
+                    notice = "사진 접근을 허용하지 않아 스크린샷을 저장하지 못했습니다"
+                    return
+                }
+                try await PHPhotoLibrary.shared().performChanges {
+                    PHAssetCreationRequest.forAsset().addResource(with: .photo, data: png, options: nil)
+                }
+                notice = "스크린샷을 사진에 저장했습니다"
+            } catch {
+                notice = "스크린샷을 저장하지 못했습니다: \(Self.message(error) ?? "")"
+            }
+        }
     }
 
     func setRewindEnabled(_ value: Bool) {

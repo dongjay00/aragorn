@@ -127,6 +127,15 @@ impl SettingsView {
                     )
                     .changed();
                 ui.label("끄면 되감기용 스테이트를 쌓지 않아 메모리를 아낍니다.");
+                ui.separator();
+                ui.strong("이어하기");
+                changed |= ui
+                    .checkbox(
+                        &mut config.resume.enabled,
+                        "게임을 닫을 때의 자리를 남기고, 다시 열면 그 자리에서 이어서 한다",
+                    )
+                    .changed();
+                ui.label("스테이트 메뉴의 \"처음부터 다시 시작\"으로 게임 세이브에서 시작할 수 있습니다.");
             });
         self.open = open;
         if !open {

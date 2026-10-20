@@ -301,6 +301,7 @@ dependencies = [
  "ed25519-dalek",
  "gb-core",
  "lz4_flex",
+ "png 0.17.16",
  "semver",
  "serde",
  "serde_json",

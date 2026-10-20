@@ -8,7 +8,7 @@ use std::{
 
 /// ROM 옆의 `<ROM 이름>.sav` 파일. 다른 에뮬레이터(BGB, mGBA, VBA-M)와 같은 위치다.
 /// 스테이트는 같은 자리의 `<ROM 이름>.ss0`–`.ss9`, 썸네일은 `.ss0.thumb`(RGBA u32 LE)이다.
-/// 치트 목록은 `<ROM 이름>.cht`(JSON)다.
+/// 치트 목록은 `<ROM 이름>.cht`(JSON), 이어하기 스테이트는 `<ROM 이름>.ssr`이다.
 pub struct FsSaveStore {
     path: PathBuf,
     rom_path: PathBuf,
@@ -110,6 +110,14 @@ impl SaveStore for FsSaveStore {
 
     fn save_cheats(&self, data: &[u8]) -> io::Result<()> {
         write_atomic(&self.cheats_path(), data)
+    }
+
+    fn load_resume(&self) -> io::Result<Option<Vec<u8>>> {
+        read_optional(&self.rom_path.with_extension("ssr"))
+    }
+
+    fn save_resume(&self, data: &[u8]) -> io::Result<()> {
+        write_atomic(&self.rom_path.with_extension("ssr"), data)
     }
 }
 

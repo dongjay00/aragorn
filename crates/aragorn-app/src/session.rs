@@ -29,6 +29,13 @@ pub trait SaveStore {
     fn save_cheats(&self, _data: &[u8]) -> io::Result<()> {
         Ok(())
     }
+    /// 이어하기 스테이트(게임을 닫을 때의 상태). 없으면 `Ok(None)`.
+    fn load_resume(&self) -> io::Result<Option<Vec<u8>>> {
+        Ok(None)
+    }
+    fn save_resume(&self, _data: &[u8]) -> io::Result<()> {
+        Ok(())
+    }
 }
 
 /// 스테이트 슬롯 수 (스펙 §5.1). 단축키 F1–F10이 슬롯 0–9다.
@@ -432,6 +439,59 @@ impl Session {
         Ok(())
     }
 
+    /// 이어하기 스테이트를 남긴다 (앱을 닫거나 백그라운드로 갈 때, 다른 게임을 열 때).
+    /// 게임 세이브를 먼저 저장해 이어하기의 외부 RAM과 세이브 파일을 같게 둔다. 그래야 다음에 열 때
+    /// 세이브 파일이 그 뒤로 바뀌었는지 알 수 있다.
+    pub fn save_resume(&mut self) -> Result<(), String> {
+        if !self.flush() {
+            return Err("게임 세이브를 저장하지 못해 이어하기를 남기지 않았습니다".to_string());
+        }
+        let data = self.gb.save_state(self.clock.now_unix());
+        self.store
+            .save_resume(&data)
+            .map_err(|e| format!("이어하기를 저장하지 못했습니다: {e}"))
+    }
+
+    /// 이어하기 스테이트가 있으면 불러온다. 불러왔으면 `Ok(true)`, 없으면 `Ok(false)`.
+    /// 이어하기를 남긴 뒤 세이브 파일이 바뀌었으면(다른 기기에서 가져온 세이브 등) 세이브 파일을 지키려고
+    /// 불러오지 않고 이유를 돌려준다. 실패해도 지금 게임은 그대로다.
+    pub fn resume(&mut self) -> Result<bool, String> {
+        let data = match self.store.load_resume() {
+            Ok(Some(data)) => data,
+            Ok(None) => return Ok(false),
+            Err(e) => return Err(format!("이어하기를 읽을 수 없습니다: {e}")),
+        };
+        let now = self.clock.now_unix();
+        let ram_len = self.gb.cartridge_ram_len();
+        let save_ram = self.gb.battery_ram(now).map(|mut ram| {
+            ram.truncate(ram_len);
+            ram
+        });
+        let current = self.gb.save_state(now);
+        self.gb
+            .load_state(&data, now)
+            .map_err(|e| format!("이어하기를 불러오지 못했습니다: {e}"))?;
+        let resumed_ram = self.gb.battery_ram(now).map(|mut ram| {
+            ram.truncate(ram_len);
+            ram
+        });
+        if save_ram != resumed_ram {
+            self.gb
+                .load_state(&current, now)
+                .expect("방금 만든 스테이트는 다시 불러올 수 있다");
+            return Err(
+                "이어하기 뒤로 세이브 파일이 바뀌어 세이브 파일에서 시작합니다".to_string(),
+            );
+        }
+        self.pacer.reset();
+        self.idle_frames = 0;
+        self.audio.clear();
+        if let Some(rewind) = &mut self.rewind {
+            rewind.clear();
+        }
+        Ok(true)
+    }
+
     /// 이 게임의 치트 목록.
     pub fn cheats(&self) -> &[CheatEntry] {
         &self.cheats
@@ -558,6 +618,7 @@ mod tests {
         /// 슬롯별 (스테이트, 썸네일)
         states: RefCell<HashMap<u8, Slot>>,
         cheats: RefCell<Option<Vec<u8>>>,
+        resume: RefCell<Option<Vec<u8>>>,
     }
 
     struct Shared(Rc<MemoryStore>);
@@ -601,6 +662,15 @@ mod tests {
 
         fn save_cheats(&self, data: &[u8]) -> io::Result<()> {
             *self.0.cheats.borrow_mut() = Some(data.to_vec());
+            Ok(())
+        }
+
+        fn load_resume(&self) -> io::Result<Option<Vec<u8>>> {
+            Ok(self.0.resume.borrow().clone())
+        }
+
+        fn save_resume(&self, data: &[u8]) -> io::Result<()> {
+            *self.0.resume.borrow_mut() = Some(data.to_vec());
             Ok(())
         }
     }
@@ -1314,6 +1384,67 @@ mod tests {
             errors[0].starts_with("치트 파일을 읽을 수 없습니다"),
             "{errors:?}"
         );
+    }
+
+    #[test]
+    fn resume_continues_where_the_game_was_closed() {
+        let (mut session, store) = session_with(counting_rom(), MemoryStore::default());
+        assert_eq!(session.resume(), Ok(false), "아직 없다");
+        run_frames(&mut session, 5);
+        let at_close = session.debug().peek(0xC000);
+        session.save_resume().unwrap();
+
+        let next = MemoryStore {
+            resume: RefCell::new(store.resume.borrow().clone()),
+            ..MemoryStore::default()
+        };
+        let (mut session, _) = session_with(counting_rom(), next);
+        assert_ne!(session.debug().peek(0xC000), at_close);
+        assert_eq!(session.resume(), Ok(true));
+        assert_eq!(session.debug().peek(0xC000), at_close);
+    }
+
+    #[test]
+    fn resume_is_skipped_when_the_save_file_changed_since() {
+        let (mut session, store) = session_with(saving_rom(true), MemoryStore::default());
+        run_frames(&mut session, 2);
+        session.save_resume().unwrap();
+        assert_eq!(
+            store.data.borrow().as_ref().unwrap()[0],
+            0x42,
+            "먼저 저장했다"
+        );
+
+        // 다른 기기에서 가져온 세이브
+        let mut other = store.data.borrow().clone().unwrap();
+        other[0] = 0x77;
+        let next = MemoryStore {
+            data: RefCell::new(Some(other)),
+            resume: RefCell::new(store.resume.borrow().clone()),
+            ..MemoryStore::default()
+        };
+        let (mut session, _) = session_with(saving_rom(true), next);
+        let err = session.resume().unwrap_err();
+        assert!(err.contains("세이브 파일에서 시작"), "{err}");
+        assert_eq!(
+            session.battery_ram().unwrap()[0],
+            0x77,
+            "가져온 세이브 그대로"
+        );
+    }
+
+    #[test]
+    fn resume_with_unchanged_save_file_is_loaded() {
+        let (mut session, store) = session_with(saving_rom(true), MemoryStore::default());
+        run_frames(&mut session, 3);
+        session.save_resume().unwrap();
+        let next = MemoryStore {
+            data: RefCell::new(store.data.borrow().clone()),
+            resume: RefCell::new(store.resume.borrow().clone()),
+            ..MemoryStore::default()
+        };
+        let (mut session, _) = session_with(saving_rom(true), next);
+        assert_eq!(session.resume(), Ok(true));
     }
 
     /// MBC3+TIMER+RAM+BATTERY(0x10) 판 `saving_rom(true)`.

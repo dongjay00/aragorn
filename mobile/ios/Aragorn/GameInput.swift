@@ -3,7 +3,7 @@ import GameController
 /// 키보드·게임패드 입력을 키 이름으로 바꿔 `onKey(device, name, pressed)`로 알린다.
 /// 이름은 설정 파일에 그대로 저장된다.
 /// - 키보드: `GCKeyCode`에 붙인 이름 (`UP`, `X`, `RETURN`, `F1`)
-/// - 게임패드: Android와 같은 이름 (`DPAD_UP`, `BUTTON_A`, `BUTTON_R2`)
+/// - 게임패드: Android와 같은 이름 (`DPAD_UP`, `BUTTON_A`, `BUTTON_R2`). 왼쪽 스틱은 방향키 이름으로 낸다.
 @MainActor
 final class GameInput {
     /// 데스크톱처럼 F1–F10은 스테이트 단축키라 키 설정에 쓸 수 없다.
@@ -88,6 +88,13 @@ final class GameInput {
         for (button, name) in buttons where button?.isPressed == true {
             names.insert(name)
         }
+        // 왼쪽 아날로그 스틱도 방향키로 다룬다.
+        let stick = pad.leftThumbstick
+        let half: Float = 0.5
+        if stick.xAxis.value < -half { names.insert("DPAD_LEFT") }
+        if stick.xAxis.value > half { names.insert("DPAD_RIGHT") }
+        if stick.yAxis.value > half { names.insert("DPAD_UP") }
+        if stick.yAxis.value < -half { names.insert("DPAD_DOWN") }
         return names
     }
 

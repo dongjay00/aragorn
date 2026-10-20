@@ -55,6 +55,14 @@ struct SettingsView: View {
                 }
 
                 Section {
+                    Toggle("이어하기", isOn: Binding(get: { model.autoResume }, set: model.setAutoResume))
+                } header: {
+                    Text("이어하기")
+                } footer: {
+                    Text("앱을 닫거나 다른 게임을 열 때의 자리를 남기고, 다시 열면 그 자리에서 이어서 합니다. 메뉴의 \"처음부터 다시 시작\"으로 게임 세이브에서 시작할 수 있습니다.")
+                }
+
+                Section {
                     Toggle("되감기", isOn: Binding(get: { model.rewindEnabled }, set: model.setRewindEnabled))
                 } header: {
                     Text("되감기")

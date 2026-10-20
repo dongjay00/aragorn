@@ -112,6 +112,8 @@ fun GameScreen(viewModel: GameViewModel, onOpenRom: () -> Unit) {
             onSettings = { viewModel.showPage(Page.SETTINGS) },
             onDebugger = { viewModel.showPage(Page.DEBUGGER) },
             onCheats = { viewModel.showPage(Page.CHEATS) },
+            onScreenshot = viewModel::saveScreenshot,
+            onRestart = viewModel::restart,
             onCheckUpdate = { viewModel.checkForUpdate(manual = true) },
         )
     }
@@ -266,6 +268,8 @@ private fun Toolbar(
     onSettings: () -> Unit,
     onDebugger: () -> Unit,
     onCheats: () -> Unit,
+    onScreenshot: () -> Unit,
+    onRestart: () -> Unit,
     onCheckUpdate: () -> Unit,
 ) {
     var menuOpen by remember { mutableStateOf(false) }
@@ -296,6 +300,16 @@ private fun Toolbar(
             TextButton(onClick = { menuOpen = true }) { Text("⋮", fontSize = 18.sp) }
             DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
                 DropdownMenuItem(text = { Text("설정") }, onClick = { menuOpen = false; onSettings() })
+                DropdownMenuItem(
+                    text = { Text("스크린샷") },
+                    enabled = hasGame,
+                    onClick = { menuOpen = false; onScreenshot() },
+                )
+                DropdownMenuItem(
+                    text = { Text("처음부터 다시 시작") },
+                    enabled = hasGame,
+                    onClick = { menuOpen = false; onRestart() },
+                )
                 DropdownMenuItem(
                     text = { Text("치트") },
                     enabled = hasGame,

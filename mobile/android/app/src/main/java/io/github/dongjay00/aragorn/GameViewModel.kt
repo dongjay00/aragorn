@@ -1,7 +1,14 @@
 package io.github.dongjay00.aragorn
 
 import android.app.Application
+import android.content.ContentValues
 import android.net.Uri
+import android.os.Build
+import android.os.Environment
+import android.provider.MediaStore
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import android.os.SystemClock
 import android.provider.OpenableColumns
 import androidx.lifecycle.AndroidViewModel
@@ -75,6 +82,10 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     /** 화면 필터 (팔레트, 색 보정, LCD 격자). */
     val video: StateFlow<VideoSettings> = _video.asStateFlow()
 
+    private val _autoResume = MutableStateFlow(settings.autoResume())
+    /** 게임을 닫을 때의 자리에서 이어서 할지. */
+    val autoResume: StateFlow<Boolean> = _autoResume.asStateFlow()
+
     private val _rewindEnabled = MutableStateFlow(settings.rewindEnabled())
     val rewindEnabled: StateFlow<Boolean> = _rewindEnabled.asStateFlow()
 
@@ -129,6 +140,9 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
 
     /** 앱이 화면에 보이는지. 백그라운드에서는 일시정지한다. */
     private var visible = false
+    /** 지금 게임의 ROM 파일 ("처음부터 다시 시작"에 쓴다). */
+    private var currentRom: File? = null
+
     /** 터치 배속 버튼과 배속 키. 둘 중 하나라도 누르면 배속이다. */
     private var fastTouch = false
     private var fastKey = false
@@ -179,27 +193,53 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         startGame { file.readBytes() to file }
     }
 
-    /** `load`가 읽은 ROM으로 게임을 시작하고 최근 목록 맨 앞에 넣는다. */
-    private fun startGame(load: () -> Pair<ByteArray, File>) {
+    /** 지금 게임을 이어하기 없이 게임 세이브에서 다시 시작한다. */
+    fun restart() {
+        val file = currentRom ?: return
+        startGame(resume = false) { file.readBytes() to file }
+    }
+
+    /**
+     * `load`가 읽은 ROM으로 게임을 시작하고 최근 목록 맨 앞에 넣는다.
+     * `resume`이면 이어하기를 켰을 때 지난번에 닫은 자리에서 이어서 한다.
+     */
+    private fun startGame(resume: Boolean = true, load: () -> Pair<ByteArray, File>) {
         viewModelScope.launch {
             val opened = withContext(Dispatchers.IO) {
                 runCatching {
                     val (rom, file) = load()
                     val savePath = File(getApplication<Application>().filesDir, "saves/${file.name}")
-                    // 같은 ROM을 다시 열면 새 세션이 세이브를 읽기 전에 지금 진행을 저장해 둔다.
-                    _emulator.value?.flush()
-                    Triple(Emulator(rom, savePath.path), file, file.name)
+                    // 지금 게임은 닫히면서 이어하기를 다시 남기지 않게 한다. 새 세션이 이어하기를 읽은 뒤에
+                    // 덮어쓰면 안 된다. 다른 게임으로 바꿀 때는 지금 자리를 먼저 남긴다.
+                    _emulator.value?.let { previous ->
+                        previous.setAutoResume(false)
+                        if (resume && _autoResume.value) runCatching { previous.saveResume() }
+                        // 같은 ROM을 다시 열면 새 세션이 세이브를 읽기 전에 지금 진행을 저장해 둔다.
+                        previous.flush()
+                    }
+                    val emulator = Emulator(rom, savePath.path)
+                    val resumed = if (resume && _autoResume.value) {
+                        runCatching { emulator.resume() }
+                    } else {
+                        Result.success(false)
+                    }
+                    Triple(emulator, file, resumed)
                 }
             }
             opened
-                .onSuccess { (emulator, file, name) ->
+                .onSuccess { (emulator, file, resumed) ->
                     _emulator.value?.close()
                     configure(emulator)
                     _emulator.value = emulator
+                    currentRom = file
+                    val name = file.name
                     watchSaveFiles(emulator, name)
                     // 헤더에 제목이 없는 ROM(테스트 ROM 등)은 파일 이름을 보인다.
                     val title = emulator.title().ifBlank { name }
-                    _notice.value = "$title 실행 중"
+                    _notice.value = resumed.fold(
+                        onSuccess = { if (it) "$title — 지난번에 닫은 자리에서 이어서 합니다" else "$title 실행 중" },
+                        onFailure = { it.userMessage ?: "$title 실행 중" },
+                    )
                     saveSetting { settings.addRecent(file.path, title) }
                     _recent.value = settings.recentGames()
                     _cheats.value = emulator.cheats()
@@ -235,6 +275,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         emulator.setFastHeld(fastTouch || fastKey)
         emulator.setRewindHeld(rewindTouch || rewindKey)
         emulator.setRewindEnabled(_rewindEnabled.value)
+        emulator.setAutoResume(_autoResume.value)
         emulator.setVideo(_video.value)
         emulator.setBreakpoints(_breakpoints.value)
         _channelMuted.value.forEachIndexed { channel, muted ->
@@ -358,6 +399,54 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         _video.value = video
         _emulator.value?.setVideo(video)
         saveSetting { settings.setVideo(video) }
+    }
+
+    fun setAutoResume(on: Boolean) {
+        _autoResume.value = on
+        _emulator.value?.setAutoResume(on)
+        saveSetting { settings.setAutoResume(on) }
+    }
+
+    /** 지금 화면을 사진의 `Pictures/Aragorn`에 PNG로 저장한다. */
+    fun saveScreenshot() {
+        val emulator = _emulator.value ?: return
+        viewModelScope.launch {
+            _notice.value = withContext(Dispatchers.IO) {
+                runCatching {
+                    val png = emulator.screenshot()
+                    val stamp = SimpleDateFormat("yyyy-MM-dd HH.mm.ss", Locale.US).format(Date())
+                    val name = "${emulator.title().ifBlank { "Aragorn" }.replace('/', '_')} $stamp.png"
+                    writePicture(name, png)
+                }.fold(
+                    onSuccess = { "스크린샷을 저장했습니다: $it" },
+                    onFailure = { "스크린샷을 저장하지 못했습니다: ${it.userMessage ?: it}" },
+                )
+            }
+        }
+    }
+
+    /**
+     * Android 10 이상은 권한 없이 사진 모음(`Pictures/Aragorn`)에 넣는다. 그 아래 버전은 권한이 필요해서
+     * 앱 전용 사진 폴더에 둔다. 저장한 위치를 돌려준다.
+     */
+    private fun writePicture(name: String, png: ByteArray): String {
+        val app = getApplication<Application>()
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            val values = ContentValues().apply {
+                put(MediaStore.Images.Media.DISPLAY_NAME, name)
+                put(MediaStore.Images.Media.MIME_TYPE, "image/png")
+                put(MediaStore.Images.Media.RELATIVE_PATH, "${Environment.DIRECTORY_PICTURES}/Aragorn")
+            }
+            val resolver = app.contentResolver
+            val uri = resolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values)
+                ?: error("사진 모음에 넣을 수 없습니다")
+            resolver.openOutputStream(uri)?.use { it.write(png) } ?: error("사진 파일을 열 수 없습니다")
+            return "사진 › Aragorn"
+        }
+        val dir = app.getExternalFilesDir(Environment.DIRECTORY_PICTURES) ?: error("사진 폴더가 없습니다")
+        val file = File(dir, name)
+        file.writeBytes(png)
+        return file.path
     }
 
     fun setRewindEnabled(on: Boolean) {

@@ -6,6 +6,8 @@
 	<key>AragornRepo</key>
 	<string>$(ARAGORN_REPO)</string>
 	<!-- 파일 앱의 "나의 iPhone › Aragorn"에 Documents(세이브)를 보인다. INFOPLIST_KEY_로는 넣을 수 없는 키다. -->
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>스크린샷을 사진 앱에 저장합니다.</string>
 	<key>UIFileSharingEnabled</key>
 	<true/>
 	<key>ITSAppUsesNonExemptEncryption</key>
