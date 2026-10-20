@@ -119,6 +119,24 @@ mod tests {
     }
 
     #[test]
+    fn play_settings_and_recent_games_round_trip_through_toml() {
+        use aragorn_app::{recent::RecentGame, video::DmgPalette};
+        let dir = tempfile::tempdir().unwrap();
+        let store = store_in(dir.path());
+        let mut config = Config::default();
+        config.video.palette = DmgPalette::Pocket;
+        config.video.lcd_grid = true;
+        config.rewind.enabled = false;
+        config.recent = vec![RecentGame {
+            path: "/roms/pokemon crystal.gbc".into(),
+            title: "PM_CRYSTAL".into(),
+            opened_at: 1_700_000_000,
+        }];
+        store.save(&config).unwrap();
+        assert_eq!(store.load(), config);
+    }
+
+    #[test]
     fn wrong_input_value_type_keeps_rest_of_config() {
         let dir = tempfile::tempdir().unwrap();
         let store = store_in(dir.path());

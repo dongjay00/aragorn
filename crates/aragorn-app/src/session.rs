@@ -1,7 +1,9 @@
 //! 에뮬레이션 세션: 불러온 ROM 하나, 그 실행 속도, 배터리 세이브 (스펙 §5.1).
 
 use crate::audio::{self, AudioSink};
+use crate::cheats::{self, CheatEntry};
 use crate::pacing::{FastForward, FramePacer, RunMode, UNLIMITED_MAX_FRAMES};
+use crate::rewind::RewindBuffer;
 use gb_core::{Button, CartError, DebugView, GameBoy, Model};
 use std::{io, time::Duration};
 
@@ -20,6 +22,13 @@ pub trait SaveStore {
     fn save_state(&self, slot: u8, data: &[u8], thumbnail: &[u32]) -> io::Result<()>;
     /// 슬롯의 썸네일. 없거나 크기가 맞지 않으면 `Ok(None)`.
     fn load_thumbnail(&self, slot: u8) -> io::Result<Option<Vec<u32>>>;
+    /// 치트 목록 파일. 없으면 `Ok(None)`.
+    fn load_cheats(&self) -> io::Result<Option<Vec<u8>>> {
+        Ok(None)
+    }
+    fn save_cheats(&self, _data: &[u8]) -> io::Result<()> {
+        Ok(())
+    }
 }
 
 /// 스테이트 슬롯 수 (스펙 §5.1). 단축키 F1–F10이 슬롯 0–9다.
@@ -104,6 +113,12 @@ pub struct Session {
     errors: Vec<String>,
     /// `pump_audio`가 재사용하는 샘플 버퍼.
     audio: Vec<f32>,
+    /// 되감기용 스테이트. 되감기를 끄면 `None`.
+    rewind: Option<RewindBuffer>,
+    /// 지난 `run`이 되감기였는지. 되감기를 시작할 때 한 번만 게임 세이브를 저장한다.
+    rewinding: bool,
+    /// 이 게임의 치트 목록.
+    cheats: Vec<CheatEntry>,
 }
 
 impl Session {
@@ -139,6 +154,18 @@ impl Session {
                 }
             }
         }
+        let cheats = match store.load_cheats() {
+            Ok(Some(data)) => cheats::decode(&data).unwrap_or_else(|e| {
+                errors.push(e);
+                Vec::new()
+            }),
+            Ok(None) => Vec::new(),
+            Err(e) => {
+                errors.push(format!("치트 파일을 읽을 수 없습니다: {e}"));
+                Vec::new()
+            }
+        };
+        gb.set_cheats(&cheats::active(&cheats));
         Ok(Session {
             gb,
             pacer: FramePacer::default(),
@@ -156,6 +183,9 @@ impl Session {
             host_rate: None,
             errors,
             audio: Vec::new(),
+            rewind: Some(RewindBuffer::default()),
+            rewinding: false,
+            cheats,
         })
     }
 
@@ -187,12 +217,18 @@ impl Session {
     ) -> u32 {
         self.silent = matches!(
             mode,
-            RunMode::Paused | RunMode::Fast(FastForward::Unlimited)
+            RunMode::Paused | RunMode::Fast(FastForward::Unlimited) | RunMode::Rewind
         );
         let speed = match mode {
             RunMode::Fast(fast) => fast.multiplier().unwrap_or(1),
-            RunMode::Normal | RunMode::Paused => 1,
+            RunMode::Normal | RunMode::Paused | RunMode::Rewind => 1,
         };
+        let rewinding = mode == RunMode::Rewind;
+        if rewinding && !self.rewinding {
+            // 되감기 전에 지금까지의 게임 세이브를 남긴다. 되감은 뒤의 진행은 다시 저장할 때 덮어쓴다.
+            self.flush();
+        }
+        self.rewinding = rewinding;
         if speed != self.audio_speed {
             // 이번에 돌릴 프레임부터 새 배율의 샘플레이트로 만든다.
             self.audio_speed = speed;
@@ -204,6 +240,10 @@ impl Session {
             RunMode::Paused => {
                 self.pacer.reset();
                 return 0;
+            }
+            RunMode::Rewind => {
+                let steps = self.pacer.frames_for(elapsed);
+                return (0..steps).take_while(|_| self.step_back()).count() as u32;
             }
             RunMode::Normal => self.pacer.frames_for(elapsed),
             RunMode::Fast(fast) => match fast.multiplier() {
@@ -233,11 +273,49 @@ impl Session {
     fn run_one_frame(&mut self) -> bool {
         self.gb.run_frame();
         self.track_battery();
+        // 무제한 배속은 실제 배율을 모르므로 8배로 친다.
+        let speed = if self.silent && !self.rewinding {
+            8
+        } else {
+            self.audio_speed
+        };
+        if let Some(rewind) = &mut self.rewind
+            && rewind.frame_passed(speed)
+        {
+            rewind.push(&self.gb.save_state(self.clock.now_unix()));
+        }
         let hit = self.gb.debug().breakpoint_hit();
         if hit.is_some() {
             self.breakpoint_stop = hit;
         }
         hit.is_none()
+    }
+
+    /// 되감기 스테이트 하나를 불러온다. 남은 것이 없으면 `false`.
+    fn step_back(&mut self) -> bool {
+        let Some(rewind) = &mut self.rewind else {
+            return false;
+        };
+        while let Some(state) = rewind.pop() {
+            if self.gb.load_state(&state, self.clock.now_unix()).is_ok() {
+                self.idle_frames = 0;
+                self.audio.clear();
+                return true;
+            }
+        }
+        false
+    }
+
+    /// 되감기를 켜거나 끈다. 끄면 쌓아 둔 스테이트를 버린다.
+    pub fn set_rewind_enabled(&mut self, enabled: bool) {
+        if enabled != self.rewind.is_some() {
+            self.rewind = enabled.then(RewindBuffer::default);
+        }
+    }
+
+    /// 되감을 수 있는 스테이트 수.
+    pub fn rewind_len(&self) -> usize {
+        self.rewind.as_ref().map_or(0, RewindBuffer::len)
     }
 
     /// 브레이크포인트에 새로 걸려 멈췄으면 그 PC를 한 번만 돌려준다. 프레임을 돌리지 않은 갱신에서는
@@ -347,7 +425,45 @@ impl Session {
         self.pacer.reset();
         self.idle_frames = 0;
         self.audio.clear();
+        // 불러오기 전의 흐름으로 되감지 않게 한다.
+        if let Some(rewind) = &mut self.rewind {
+            rewind.clear();
+        }
         Ok(())
+    }
+
+    /// 이 게임의 치트 목록.
+    pub fn cheats(&self) -> &[CheatEntry] {
+        &self.cheats
+    }
+
+    /// 치트를 목록 끝에 켠 채로 더한다. 코드가 틀리면 더하지 않고 문구를 돌려준다.
+    pub fn add_cheat(&mut self, code: &str, name: &str) -> Result<(), String> {
+        let entry = CheatEntry::new(code, name)?;
+        self.cheats.push(entry);
+        self.cheats_changed()
+    }
+
+    pub fn set_cheat_enabled(&mut self, index: usize, enabled: bool) -> Result<(), String> {
+        if let Some(entry) = self.cheats.get_mut(index) {
+            entry.enabled = enabled;
+        }
+        self.cheats_changed()
+    }
+
+    pub fn remove_cheat(&mut self, index: usize) -> Result<(), String> {
+        if index < self.cheats.len() {
+            self.cheats.remove(index);
+        }
+        self.cheats_changed()
+    }
+
+    /// 코어에 적용하고 파일에 쓴다. 쓰지 못해도 이번 실행에서는 적용한다.
+    fn cheats_changed(&mut self) -> Result<(), String> {
+        self.gb.set_cheats(&cheats::active(&self.cheats));
+        self.store
+            .save_cheats(&cheats::encode(&self.cheats))
+            .map_err(|e| format!("치트를 저장하지 못했습니다: {e}"))
     }
 
     /// 슬롯 목록에 보일 정보. 비었거나 읽을 수 없는 슬롯은 `None`.
@@ -441,6 +557,7 @@ mod tests {
         fail_save: Cell<bool>,
         /// 슬롯별 (스테이트, 썸네일)
         states: RefCell<HashMap<u8, Slot>>,
+        cheats: RefCell<Option<Vec<u8>>>,
     }
 
     struct Shared(Rc<MemoryStore>);
@@ -476,6 +593,15 @@ mod tests {
 
         fn load_thumbnail(&self, slot: u8) -> io::Result<Option<Vec<u32>>> {
             Ok(self.0.states.borrow().get(&slot).map(|(_, t)| t.clone()))
+        }
+
+        fn load_cheats(&self) -> io::Result<Option<Vec<u8>>> {
+            Ok(self.0.cheats.borrow().clone())
+        }
+
+        fn save_cheats(&self, data: &[u8]) -> io::Result<()> {
+            *self.0.cheats.borrow_mut() = Some(data.to_vec());
+            Ok(())
         }
     }
 
@@ -1066,6 +1192,128 @@ mod tests {
         assert!(session.debug().channel_muted(3));
         session.set_channel_muted(3, false);
         assert!(!session.debug().channel_muted(3));
+    }
+
+    /// `LD HL,0xC000 ; INC (HL) ; JR -3`: 0xC000을 쉬지 않고 늘린다. 프레임마다 값이 다르다.
+    fn counting_rom() -> Vec<u8> {
+        rom_with(0x00, 0x00, &[0x21, 0x00, 0xC0, 0x34, 0x18, 0xFD])
+    }
+
+    #[test]
+    fn rewind_goes_back_through_captured_frames() {
+        let (mut session, _) = session_with(counting_rom(), MemoryStore::default());
+        let mut seen = vec![session.debug().peek(0xC000)];
+        for _ in 0..10 {
+            session.advance(FRAME_DURATION);
+            seen.push(session.debug().peek(0xC000));
+        }
+        assert_eq!(
+            session.rewind_len(),
+            10 / crate::rewind::CAPTURE_INTERVAL as usize
+        );
+        let mut sink = sink();
+        // 가장 최근 스테이트(10번째 프레임 뒤) 다음은 8번째 프레임 뒤다.
+        assert_eq!(
+            session.run(FRAME_DURATION * 2, RunMode::Rewind, &mut || false),
+            2
+        );
+        assert_eq!(session.debug().peek(0xC000), seen[8]);
+        session.pump_audio(&mut sink);
+        assert!(
+            sink.received.is_empty(),
+            "되감는 동안에는 소리를 내지 않는다"
+        );
+        assert_eq!(
+            session.run(FRAME_DURATION * 3, RunMode::Rewind, &mut || false),
+            3
+        );
+        assert_eq!(session.debug().peek(0xC000), seen[2]);
+        assert_eq!(
+            session.run(FRAME_DURATION * 3, RunMode::Rewind, &mut || false),
+            0,
+            "다 되감았다"
+        );
+        assert_eq!(session.debug().peek(0xC000), seen[2]);
+        assert_eq!(session.advance(FRAME_DURATION), 1, "다시 앞으로 간다");
+        assert_eq!(session.debug().peek(0xC000), seen[3]);
+    }
+
+    #[test]
+    fn rewind_can_be_turned_off() {
+        let (mut session, _) = session_with(counting_rom(), MemoryStore::default());
+        session.set_rewind_enabled(false);
+        run_frames(&mut session, 6);
+        assert_eq!(session.rewind_len(), 0);
+        assert_eq!(
+            session.run(FRAME_DURATION, RunMode::Rewind, &mut || false),
+            0
+        );
+        session.set_rewind_enabled(true);
+        run_frames(&mut session, 2);
+        assert_eq!(session.rewind_len(), 1);
+    }
+
+    #[test]
+    fn rewinding_saves_the_game_first() {
+        let (mut session, store) = session_with(saving_rom(false), MemoryStore::default());
+        run_frames(&mut session, 4);
+        assert_eq!(
+            store.save_attempts.get(),
+            0,
+            "RAM을 켠 채라 아직 저장하지 않았다"
+        );
+        session.run(FRAME_DURATION, RunMode::Rewind, &mut || false);
+        assert_eq!(store.save_attempts.get(), 1);
+        session.run(FRAME_DURATION, RunMode::Rewind, &mut || false);
+        assert_eq!(store.save_attempts.get(), 1, "되감는 동안 한 번만");
+    }
+
+    #[test]
+    fn loading_a_slot_clears_rewind() {
+        let (mut session, _) = session_with(counting_rom(), MemoryStore::default());
+        session.save_state(0).unwrap();
+        run_frames(&mut session, 6);
+        session.load_state(0).unwrap();
+        assert_eq!(session.rewind_len(), 0);
+    }
+
+    #[test]
+    fn cheats_are_saved_and_applied_on_next_load() {
+        // LD A,(0x0200) ; JR -2
+        let rom = rom_with(0x00, 0x00, &[0xFA, 0x00, 0x02, 0x18, 0xFE]);
+        let (mut session, store) = session_with(rom.clone(), MemoryStore::default());
+        assert!(session.add_cheat("bad", "").is_err());
+        session.add_cheat("422-00F", "A=42").unwrap();
+        assert_eq!(session.debug().peek(0x0200), 0x42);
+        session.set_cheat_enabled(0, false).unwrap();
+        assert_eq!(session.debug().peek(0x0200), 0x00);
+        session.set_cheat_enabled(0, true).unwrap();
+
+        let saved = store.cheats.borrow().clone();
+        let next = MemoryStore {
+            cheats: RefCell::new(saved),
+            ..MemoryStore::default()
+        };
+        let (mut session, store) = session_with(rom, next);
+        assert_eq!(session.cheats()[0].label(), "A=42");
+        assert_eq!(session.debug().peek(0x0200), 0x42);
+        session.remove_cheat(0).unwrap();
+        assert!(session.cheats().is_empty());
+        assert_eq!(store.cheats.borrow().as_deref(), Some(&b"[]"[..]));
+    }
+
+    #[test]
+    fn broken_cheat_file_is_reported() {
+        let store = MemoryStore {
+            cheats: RefCell::new(Some(b"not json".to_vec())),
+            ..MemoryStore::default()
+        };
+        let (mut session, _) = session_with(looping_rom(), store);
+        let errors = session.take_errors();
+        assert!(
+            errors[0].starts_with("치트 파일을 읽을 수 없습니다"),
+            "{errors:?}"
+        );
     }
 
     /// MBC3+TIMER+RAM+BATTERY(0x10) 판 `saving_rom(true)`.

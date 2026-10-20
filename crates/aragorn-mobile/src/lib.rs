@@ -16,8 +16,10 @@ mod update;
 pub use debug::{
     CpuView, DisasmLine, IoGroup, IoRow, MapView, PaletteGroup, PaletteRow, SpriteView, Swatch,
 };
-pub use settings::Settings;
-pub use types::{FastSpeed, GbButton, Image, InputAction, InputDevice, Speed};
+pub use settings::{PadLayout, RecentRom, Settings};
+pub use types::{
+    FastSpeed, GbButton, Image, InputAction, InputDevice, Palette, Speed, VideoSettings,
+};
 pub use update::UpdateCheck;
 
 use aragorn_app::session::{self, STATE_SLOTS, THUMBNAIL_HEIGHT, THUMBNAIL_WIDTH};
@@ -84,6 +86,15 @@ pub struct SlotSummary {
     /// `방금`, `5분 전`
     pub ago: String,
     pub thumbnail: Option<Image>,
+}
+
+/// 치트 목록의 한 줄.
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct CheatInfo {
+    pub code: String,
+    /// 이름이 없으면 코드
+    pub label: String,
+    pub enabled: bool,
 }
 
 /// 실행 중인 게임 하나.
@@ -193,6 +204,58 @@ impl Emulator {
 
     pub fn set_muted(&self, muted: bool) {
         self.post(move |state| state.session.set_sound_off(muted));
+    }
+
+    /// 되감기 버튼(키)을 누르고 있는지.
+    pub fn set_rewind_held(&self, held: bool) {
+        self.post(move |state| state.rewind_held = held);
+    }
+
+    /// 되감기를 쓸지. 끄면 쌓아 둔 스테이트를 버린다.
+    pub fn set_rewind_enabled(&self, enabled: bool) {
+        self.post(move |state| state.session.set_rewind_enabled(enabled));
+    }
+
+    /// 화면 필터를 바꾸고 지금 화면에 바로 적용한다.
+    pub fn set_video(&self, video: VideoSettings) {
+        self.post(move |state| {
+            state.video = video.into();
+            state.publish();
+        });
+    }
+
+    // ---- 치트 ----
+
+    pub fn cheats(&self) -> Vec<CheatInfo> {
+        self.call(|state| {
+            state
+                .session
+                .cheats()
+                .iter()
+                .map(|entry| CheatInfo {
+                    code: entry.code.clone(),
+                    label: entry.label().to_string(),
+                    enabled: entry.enabled,
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+    }
+
+    /// 치트를 켠 채로 더한다. 코드가 틀리면 오류다. 목록은 세이브 옆 `.cht`에 저장한다.
+    pub fn add_cheat(&self, code: String, name: String) -> Result<(), EmulatorError> {
+        self.call(move |state| state.session.add_cheat(&code, &name))?
+            .map_err(|reason| EmulatorError::State { reason })
+    }
+
+    pub fn set_cheat_enabled(&self, index: u32, enabled: bool) -> Result<(), EmulatorError> {
+        self.call(move |state| state.session.set_cheat_enabled(index as usize, enabled))?
+            .map_err(|reason| EmulatorError::State { reason })
+    }
+
+    pub fn remove_cheat(&self, index: u32) -> Result<(), EmulatorError> {
+        self.call(move |state| state.session.remove_cheat(index as usize))?
+            .map_err(|reason| EmulatorError::State { reason })
     }
 
     // ---- 세이브 ----
@@ -573,6 +636,63 @@ mod tests {
         assert_eq!(emulator.memory_rows(4095, 10).unwrap().len(), 1);
         emulator.set_channel_muted(2, true);
         assert_eq!(emulator.channels_muted(), [false, false, true, false]);
+    }
+
+    #[test]
+    fn rewind_button_shows_rewind_and_goes_back() {
+        let dir = tempfile::tempdir().unwrap();
+        let emulator = start(&dir);
+        wait_for_frames(&emulator, 20);
+        emulator.set_rewind_held(true);
+        wait_for_speed(&emulator, "되감기");
+        emulator.set_rewind_held(false);
+        wait_for_speed(&emulator, "1배");
+    }
+
+    #[test]
+    fn cheats_are_listed_and_saved_next_to_the_save() {
+        let dir = tempfile::tempdir().unwrap();
+        let emulator = start(&dir);
+        assert!(matches!(
+            emulator.add_cheat("nope".into(), "".into()),
+            Err(EmulatorError::State { .. })
+        ));
+        emulator
+            .add_cheat("010138cd".into(), "체력".into())
+            .unwrap();
+        emulator.set_cheat_enabled(0, false).unwrap();
+        assert_eq!(
+            emulator.cheats(),
+            [CheatInfo {
+                code: "010138CD".into(),
+                label: "체력".into(),
+                enabled: false,
+            }]
+        );
+        assert!(dir.path().join("saves/test.cht").exists());
+        emulator.remove_cheat(0).unwrap();
+        assert!(emulator.cheats().is_empty());
+    }
+
+    #[test]
+    fn video_filter_changes_the_published_frame() {
+        let dir = tempfile::tempdir().unwrap();
+        let emulator = start(&dir);
+        wait_for_frames(&emulator, 2);
+        emulator.set_speed(Speed::X1, FastSpeed::X4);
+        assert!(emulator.toggle_pause());
+        wait_for_speed(&emulator, "일시정지");
+        let before = emulator.frame();
+        let number = emulator.frame_number();
+        emulator.set_video(VideoSettings {
+            palette: Palette::Gray,
+            color_correction: false,
+            lcd_grid: false,
+        });
+        wait_for_frames(&emulator, number + 1);
+        let after = emulator.frame();
+        assert_ne!(before, after);
+        assert_eq!(&after[..4], &[0xFF, 0xFF, 0xFF, 0xFF], "흰색 배경");
     }
 
     #[test]

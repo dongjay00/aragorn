@@ -7,6 +7,7 @@ use crate::types::rgba_bytes;
 use aragorn_app::{
     pacing::{BaseSpeed, FastForward, RunMode, SpeedControl, UNLIMITED_BUDGET},
     session::Session,
+    video::VideoConfig,
 };
 use aragorn_host::{CpalAudio, FsSaveStore, SystemClock};
 use std::{
@@ -39,9 +40,12 @@ pub struct State {
     /// 강제 업데이트 전까지 게임을 진행하지 않는다.
     pub blocked: bool,
     pub fast_held: bool,
+    pub rewind_held: bool,
     pub base_speed: BaseSpeed,
     pub fast_forward: FastForward,
     pub screen: Arc<Screen>,
+    /// 화면 필터 (팔레트, 색 보정).
+    pub video: VideoConfig,
 }
 
 impl State {
@@ -50,14 +54,20 @@ impl State {
         if self.background || self.blocked {
             RunMode::Paused
         } else {
-            self.speed
-                .mode(self.fast_held, self.fast_forward, self.base_speed)
+            self.speed.mode(
+                self.fast_held,
+                self.rewind_held,
+                self.fast_forward,
+                self.base_speed,
+            )
         }
     }
 
-    /// 지금 화면을 앱에 보인다 (스테이트 불러오기, 단계 실행 뒤).
+    /// 지금 화면에 필터를 적용해 앱에 보인다.
     pub fn publish(&self) {
-        self.screen.publish(self.session.framebuffer());
+        let cgb = self.session.debug().cgb();
+        self.screen
+            .publish(&self.video.apply(self.session.framebuffer(), cgb));
     }
 
     pub fn notice(&self, message: String) {
@@ -70,6 +80,7 @@ impl State {
             RunMode::Paused => "일시정지",
             RunMode::Normal => "1배",
             RunMode::Fast(fast) => fast.label(),
+            RunMode::Rewind => "되감기",
         };
         self.screen.set_status(self.speed.is_paused(), speed);
     }
@@ -160,9 +171,11 @@ pub fn run(
         background: false,
         blocked: false,
         fast_held: false,
+        rewind_held: false,
         base_speed: BaseSpeed::default(),
         fast_forward: FastForward::default(),
         screen,
+        video: VideoConfig::default(),
     };
     state.publish();
     state.update_status();
@@ -172,6 +185,7 @@ pub fn run(
     let mut last_tick = Instant::now();
     'run: loop {
         // 멈춰 있으면 명령이 올 때까지 잠들고, 무제한 배속이면 기다리지 않는다.
+        // 되감기는 보통 속도처럼 프레임마다 깨어난다.
         let received = match state.mode() {
             RunMode::Paused => commands.recv().map_err(|_| RecvTimeoutError::Disconnected),
             RunMode::Fast(FastForward::Unlimited) => commands.try_recv().map_err(|e| match e {

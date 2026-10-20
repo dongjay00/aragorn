@@ -1,5 +1,7 @@
 use crate::input::InputConfig;
+use crate::recent::RecentGame;
 use crate::update::UpdatePrefs;
+use crate::video::VideoConfig;
 use semver::Version;
 use serde::{Deserialize, Serialize};
 
@@ -9,6 +11,30 @@ pub struct Config {
     pub update: UpdateConfig,
     pub input: InputConfig,
     pub audio: AudioConfig,
+    pub video: VideoConfig,
+    pub rewind: RewindConfig,
+    /// 최근에 연 게임, 최근 것부터.
+    #[serde(deserialize_with = "lenient_recent")]
+    pub recent: Vec<RecentGame>,
+}
+
+/// 목록이 깨졌으면 설정 전체를 버리지 않고 빈 목록으로 본다.
+fn lenient_recent<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Vec<RecentGame>, D::Error> {
+    let value = serde_json::Value::deserialize(d)?;
+    Ok(serde_json::from_value(value).unwrap_or_default())
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct RewindConfig {
+    /// 되감기를 쓸지. 끄면 스테이트를 쌓지 않아 메모리와 CPU를 아낀다.
+    pub enabled: bool,
+}
+
+impl Default for RewindConfig {
+    fn default() -> Self {
+        Self { enabled: true }
+    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -89,6 +115,14 @@ mod tests {
         assert!(!Config::default().audio.muted);
         let c: Config = serde_json::from_str(r#"{"audio":{"muted":true}}"#).unwrap();
         assert!(c.audio.muted);
+    }
+
+    #[test]
+    fn new_sections_default_when_missing_or_broken() {
+        let c: Config = serde_json::from_str(r#"{"recent":[{"path":1}]}"#).unwrap();
+        assert!(c.recent.is_empty());
+        assert!(c.rewind.enabled, "되감기는 기본으로 켠다");
+        assert_eq!(c.video, VideoConfig::default());
     }
 
     #[test]

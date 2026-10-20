@@ -3,6 +3,7 @@
 use aragorn_app::{
     input::Action,
     pacing::{BaseSpeed, FastForward},
+    video::{DmgPalette, VideoConfig},
 };
 
 /// RGBA 바이트 이미지 (Android `Bitmap.Config.ARGB_8888`의 메모리 순서와 같다).
@@ -123,6 +124,7 @@ pub enum InputAction {
     Start,
     Select,
     FastForward,
+    Rewind,
     Pause,
     Mute,
 }
@@ -141,6 +143,7 @@ impl From<InputAction> for Action {
             InputAction::FastForward => Self::FastForward,
             InputAction::Pause => Self::Pause,
             InputAction::Mute => Self::Mute,
+            InputAction::Rewind => Self::Rewind,
         }
     }
 }
@@ -159,6 +162,7 @@ impl From<Action> for InputAction {
             Action::FastForward => Self::FastForward,
             Action::Pause => Self::Pause,
             Action::Mute => Self::Mute,
+            Action::Rewind => Self::Rewind,
         }
     }
 }
@@ -212,6 +216,77 @@ pub fn fast_speed_label(speed: FastSpeed) -> String {
     FastForward::from(speed).label().to_string()
 }
 
+/// 흑백 게임의 4색.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum Palette {
+    Green,
+    Original,
+    Pocket,
+    Gray,
+}
+
+impl From<Palette> for DmgPalette {
+    fn from(palette: Palette) -> Self {
+        match palette {
+            Palette::Green => Self::Green,
+            Palette::Original => Self::Original,
+            Palette::Pocket => Self::Pocket,
+            Palette::Gray => Self::Gray,
+        }
+    }
+}
+
+impl From<DmgPalette> for Palette {
+    fn from(palette: DmgPalette) -> Self {
+        match palette {
+            DmgPalette::Green => Self::Green,
+            DmgPalette::Original => Self::Original,
+            DmgPalette::Pocket => Self::Pocket,
+            DmgPalette::Gray => Self::Gray,
+        }
+    }
+}
+
+#[uniffi::export]
+pub fn palette_label(palette: Palette) -> String {
+    DmgPalette::from(palette).label().to_string()
+}
+
+/// 고를 수 있는 팔레트, 설정 화면 순서대로.
+#[uniffi::export]
+pub fn all_palettes() -> Vec<Palette> {
+    DmgPalette::ALL.into_iter().map(Palette::from).collect()
+}
+
+/// 화면 필터. LCD 격자는 앱이 화면 위에 그린다.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Record)]
+pub struct VideoSettings {
+    pub palette: Palette,
+    /// 컬러 게임 색 보정
+    pub color_correction: bool,
+    pub lcd_grid: bool,
+}
+
+impl From<VideoSettings> for VideoConfig {
+    fn from(video: VideoSettings) -> Self {
+        Self {
+            palette: video.palette.into(),
+            color_correction: video.color_correction,
+            lcd_grid: video.lcd_grid,
+        }
+    }
+}
+
+impl From<VideoConfig> for VideoSettings {
+    fn from(video: VideoConfig) -> Self {
+        Self {
+            palette: video.palette.into(),
+            color_correction: video.color_correction,
+            lcd_grid: video.lcd_grid,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -229,6 +304,14 @@ mod tests {
             assert_eq!(Action::from(mobile), app);
             assert_eq!(InputAction::from(app), mobile);
         }
+    }
+
+    #[test]
+    fn palettes_round_trip() {
+        for palette in all_palettes() {
+            assert_eq!(Palette::from(DmgPalette::from(palette)), palette);
+        }
+        assert_eq!(palette_label(Palette::Pocket), "게임보이 포켓");
     }
 
     #[test]

@@ -103,6 +103,8 @@ pub enum RunMode {
     Paused,
     Normal,
     Fast(FastForward),
+    /// 되감기 키를 누르고 있다. 거꾸로 간다.
+    Rewind,
 }
 
 /// 일시정지 토글과 배속 키 상태로 실행 모드를 정한다.
@@ -130,11 +132,19 @@ impl SpeedControl {
         self.paused
     }
 
-    /// 일시정지 중에는 배속 키를 눌러도 멈춰 있다. 배속 키를 누르면 기본 속도와 배속 속도 중
-    /// 빠른 쪽으로 돈다. 누르는 동안 오히려 느려지지 않게 한다.
-    pub fn mode(&self, fast_held: bool, fast_forward: FastForward, base: BaseSpeed) -> RunMode {
+    /// 일시정지 중에는 배속·되감기 키를 눌러도 멈춰 있다. 되감기 키가 배속 키보다 먼저다.
+    /// 배속 키를 누르면 기본 속도와 배속 속도 중 빠른 쪽으로 돈다. 누르는 동안 오히려 느려지지 않게 한다.
+    pub fn mode(
+        &self,
+        fast_held: bool,
+        rewind_held: bool,
+        fast_forward: FastForward,
+        base: BaseSpeed,
+    ) -> RunMode {
         if self.paused {
             RunMode::Paused
+        } else if rewind_held {
+            RunMode::Rewind
         } else if fast_held {
             RunMode::Fast(base.fast().map_or(fast_forward, |b| b.max(fast_forward)))
         } else {
@@ -245,22 +255,22 @@ mod tests {
     fn speed_control_modes() {
         let mut c = SpeedControl::default();
         assert_eq!(
-            c.mode(false, FastForward::X2, BaseSpeed::X1),
+            c.mode(false, false, FastForward::X2, BaseSpeed::X1),
             RunMode::Normal
         );
         assert_eq!(
-            c.mode(true, FastForward::X2, BaseSpeed::X1),
+            c.mode(true, false, FastForward::X2, BaseSpeed::X1),
             RunMode::Fast(FastForward::X2)
         );
         c.toggle_pause();
         assert!(c.is_paused());
         assert_eq!(
-            c.mode(true, FastForward::X2, BaseSpeed::X1),
+            c.mode(true, false, FastForward::X2, BaseSpeed::X1),
             RunMode::Paused
         );
         c.toggle_pause();
         assert_eq!(
-            c.mode(false, FastForward::X2, BaseSpeed::X1),
+            c.mode(false, false, FastForward::X2, BaseSpeed::X1),
             RunMode::Normal
         );
         c.pause();
@@ -276,11 +286,11 @@ mod tests {
         let c = SpeedControl::default();
         assert_eq!(BaseSpeed::default(), BaseSpeed::X1);
         assert_eq!(
-            c.mode(false, FastForward::X4, BaseSpeed::X1),
+            c.mode(false, false, FastForward::X4, BaseSpeed::X1),
             RunMode::Normal
         );
         assert_eq!(
-            c.mode(false, FastForward::X4, BaseSpeed::X2),
+            c.mode(false, false, FastForward::X4, BaseSpeed::X2),
             RunMode::Fast(FastForward::X2)
         );
     }
@@ -289,12 +299,26 @@ mod tests {
     fn fast_key_never_slows_base_speed() {
         let c = SpeedControl::default();
         assert_eq!(
-            c.mode(true, FastForward::X2, BaseSpeed::X4),
+            c.mode(true, false, FastForward::X2, BaseSpeed::X4),
             RunMode::Fast(FastForward::X4)
         );
         assert_eq!(
-            c.mode(true, FastForward::Unlimited, BaseSpeed::X2),
+            c.mode(true, false, FastForward::Unlimited, BaseSpeed::X2),
             RunMode::Fast(FastForward::Unlimited)
+        );
+    }
+
+    #[test]
+    fn rewind_wins_over_fast_but_not_pause() {
+        let mut c = SpeedControl::default();
+        assert_eq!(
+            c.mode(true, true, FastForward::X4, BaseSpeed::X2),
+            RunMode::Rewind
+        );
+        c.pause();
+        assert_eq!(
+            c.mode(false, true, FastForward::X4, BaseSpeed::X1),
+            RunMode::Paused
         );
     }
 
@@ -303,7 +327,7 @@ mod tests {
         let mut c = SpeedControl::default();
         c.pause();
         assert_eq!(
-            c.mode(false, FastForward::X4, BaseSpeed::X4),
+            c.mode(false, false, FastForward::X4, BaseSpeed::X4),
             RunMode::Paused
         );
     }

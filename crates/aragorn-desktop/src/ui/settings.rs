@@ -1,8 +1,10 @@
-//! 설정 창: 키보드·게임패드 매핑, 기본 속도와 배속 속도 (스펙 §6.2).
+//! 설정 창: 키보드·게임패드 매핑, 기본 속도와 배속 속도 (스펙 §6.2), 화면 필터, 되감기.
 
 use aragorn_app::{
+    config::Config,
     input::{Action, InputConfig},
     pacing::{BaseSpeed, FastForward},
+    video::DmgPalette,
 };
 use eframe::egui::{self, Key};
 
@@ -49,9 +51,10 @@ impl SettingsView {
     }
 
     /// 설정 창을 그린다. 설정이 바뀌었으면 `true`.
-    pub fn show(&mut self, ctx: &egui::Context, input: &mut InputConfig) -> bool {
+    pub fn show(&mut self, ctx: &egui::Context, config: &mut Config) -> bool {
         let mut open = self.open;
         let mut changed = false;
+        let input = &mut config.input;
         egui::Window::new("설정")
             .open(&mut open)
             .resizable(false)
@@ -91,11 +94,39 @@ impl SettingsView {
                     }
                 });
                 ui.add_space(8.0);
-                if ui.button("기본값으로").clicked() {
+                if ui.button("키 설정과 속도를 기본값으로").clicked() {
                     *input = InputConfig::default();
                     self.capturing = None;
                     changed = true;
                 }
+                ui.separator();
+                ui.strong("화면");
+                ui.horizontal(|ui| {
+                    ui.label("흑백 게임 색:");
+                    for palette in DmgPalette::ALL {
+                        changed |= ui
+                            .radio_value(&mut config.video.palette, palette, palette.label())
+                            .changed();
+                    }
+                });
+                changed |= ui
+                    .checkbox(
+                        &mut config.video.color_correction,
+                        "컬러 게임 색 보정 (게임보이 컬러 화면처럼 덜 진하게)",
+                    )
+                    .changed();
+                changed |= ui
+                    .checkbox(&mut config.video.lcd_grid, "LCD 격자 (3배 이상으로 그릴 때)")
+                    .changed();
+                ui.separator();
+                ui.strong("되감기");
+                changed |= ui
+                    .checkbox(
+                        &mut config.rewind.enabled,
+                        "되감기 키를 누르는 동안 최근 약 20초를 거꾸로 돌린다",
+                    )
+                    .changed();
+                ui.label("끄면 되감기용 스테이트를 쌓지 않아 메모리를 아낍니다.");
             });
         self.open = open;
         if !open {

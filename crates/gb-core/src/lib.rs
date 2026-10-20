@@ -6,6 +6,7 @@
 pub mod apu;
 pub mod bus;
 pub mod cartridge;
+pub mod cheat;
 pub mod cpu;
 pub mod debugger;
 mod gameboy;
@@ -18,6 +19,7 @@ pub mod state;
 pub mod timer;
 
 pub use cartridge::{CartError, Header};
+pub use cheat::{Cheat, CheatError};
 pub use cpu::{IllegalOpcode, Registers, disasm::Instruction};
 pub use gameboy::{DebugView, GameBoy};
 pub use joypad::Button;
