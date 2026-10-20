@@ -6,6 +6,7 @@ use crate::{
         debugger::{DebugCommand, DebuggerView},
         input::{self, InputFrame, Keymap, TypingGuard},
         io_view::IoView,
+        link::{LinkCommand, LinkView},
         screen::ScreenView,
         settings::SettingsView,
         state_slots::{self, SlotCommand, SlotsView},
@@ -175,6 +176,7 @@ pub struct AragornApp {
     vram: VramView,
     io: IoView,
     cheats: CheatsView,
+    link: LinkView,
     typing_guard: TypingGuard,
 }
 
@@ -223,6 +225,7 @@ impl AragornApp {
             vram: VramView::default(),
             io: IoView::default(),
             cheats: CheatsView::default(),
+            link: LinkView::default(),
             typing_guard: TypingGuard::default(),
         };
         if app.worker.is_some() {
@@ -366,6 +369,23 @@ impl AragornApp {
             },
         );
         self.save_config();
+    }
+
+    /// 링크 창의 요청을 처리한다.
+    fn run_link_command(&mut self, command: LinkCommand) {
+        let Some(session) = &mut self.session else {
+            return;
+        };
+        match command {
+            LinkCommand::Host => match aragorn_host::TcpLink::host(aragorn_host::DEFAULT_PORT) {
+                Ok(link) => session.set_link(Box::new(link)),
+                Err(e) => self.notice = Some(format!("링크를 열 수 없습니다: {e}")),
+            },
+            LinkCommand::Connect(address) => {
+                session.set_link(Box::new(aragorn_host::TcpLink::connect(&address)));
+            }
+            LinkCommand::Disconnect => session.disconnect_link(),
+        }
     }
 
     /// 치트 창의 요청을 처리한다.
@@ -718,6 +738,9 @@ impl eframe::App for AragornApp {
                 if self.session.is_some() && ui.button("치트").clicked() {
                     self.cheats.open = !self.cheats.open;
                 }
+                if self.session.is_some() && ui.button("링크").clicked() {
+                    self.link.open = !self.link.open;
+                }
                 if let Some(session) = &self.session {
                     let now = SystemClock.now_unix();
                     ui.menu_button("스테이트", |ui| {
@@ -767,6 +790,10 @@ impl eframe::App for AragornApp {
                     && let Some(text) = mode_text(self.mode)
                 {
                     ui.strong(text);
+                    ui.separator();
+                }
+                if let Some(status) = self.session.as_ref().and_then(Session::link_status) {
+                    ui.strong(status.text());
                     ui.separator();
                 }
                 if self.session.is_some() && self.config.audio.muted {
@@ -843,6 +870,13 @@ impl eframe::App for AragornApp {
         };
         for command in cheat_commands {
             self.run_cheat_command(command);
+        }
+        let link_command = match &self.session {
+            Some(session) => self.link.show(ui.ctx(), session.link_status().as_ref()),
+            None => None,
+        };
+        if let Some(command) = link_command {
+            self.run_link_command(command);
         }
         if restart_requested {
             let ctx = ui.ctx().clone();

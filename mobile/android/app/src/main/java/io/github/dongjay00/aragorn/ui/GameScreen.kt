@@ -100,6 +100,7 @@ fun GameScreen(viewModel: GameViewModel, onOpenRom: () -> Unit) {
     val recent by viewModel.recent.collectAsStateWithLifecycle()
     val rewindEnabled by viewModel.rewindEnabled.collectAsStateWithLifecycle()
     val editing by viewModel.editingPad.collectAsStateWithLifecycle()
+    val linkText by viewModel.linkText.collectAsStateWithLifecycle()
     var slotsOpen by remember { mutableStateOf(false) }
 
     val editBar = @Composable { landscape: Boolean ->
@@ -133,6 +134,7 @@ fun GameScreen(viewModel: GameViewModel, onOpenRom: () -> Unit) {
             onScreenshot = viewModel::saveScreenshot,
             onRestart = viewModel::restart,
             onEditPad = viewModel::startPadEdit,
+            onLink = { viewModel.showPage(Page.LINK) },
             onCheckUpdate = { viewModel.checkForUpdate(manual = true) },
         )
     }
@@ -147,7 +149,8 @@ fun GameScreen(viewModel: GameViewModel, onOpenRom: () -> Unit) {
     val status = @Composable {
         Row(Modifier.fillMaxWidth().padding(vertical = 6.dp)) {
             Text(
-                notice ?: "",
+                // 링크를 쓰는 동안에는 링크 상태를 먼저 보인다.
+                linkText ?: notice ?: "",
                 color = Color.LightGray,
                 fontSize = 12.sp,
                 maxLines = 1,
@@ -341,6 +344,7 @@ private fun Toolbar(
     onScreenshot: () -> Unit,
     onRestart: () -> Unit,
     onEditPad: () -> Unit,
+    onLink: () -> Unit,
     onCheckUpdate: () -> Unit,
 ) {
     var menuOpen by remember { mutableStateOf(false) }
@@ -384,6 +388,11 @@ private fun Toolbar(
                 DropdownMenuItem(
                     text = { Text("패드 위치 편집") },
                     onClick = { menuOpen = false; onEditPad() },
+                )
+                DropdownMenuItem(
+                    text = { Text("링크 케이블") },
+                    enabled = hasGame,
+                    onClick = { menuOpen = false; onLink() },
                 )
                 DropdownMenuItem(
                     text = { Text("치트") },

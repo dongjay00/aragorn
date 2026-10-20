@@ -97,6 +97,8 @@ impl State {
             RunMode::Rewind => "되감기",
         };
         self.screen.set_status(self.speed.is_paused(), speed);
+        self.screen
+            .set_link_text(self.session.link_status().map(|s| s.text()));
     }
 }
 
@@ -108,6 +110,8 @@ pub struct Screen {
     notices: Mutex<Vec<String>>,
     /// (사용자 일시정지, 실행 배율 문구). 앱이 매 프레임 읽어도 에뮬레이터 스레드를 기다리지 않게 둔다.
     status: Mutex<(bool, String)>,
+    /// 링크 상태 문구. 링크를 쓰지 않으면 `None`.
+    link: Mutex<Option<String>>,
 }
 
 impl Screen {
@@ -136,6 +140,20 @@ impl Screen {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .clone()
+    }
+
+    pub fn link_text(&self) -> Option<String> {
+        self.link
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+
+    fn set_link_text(&self, text: Option<String>) {
+        let mut link = self.link.lock().unwrap_or_else(PoisonError::into_inner);
+        if *link != text {
+            *link = text;
+        }
     }
 
     fn set_status(&self, paused: bool, speed: &str) {
@@ -207,8 +225,12 @@ pub fn run(
     'run: loop {
         // 멈춰 있으면 명령이 올 때까지 잠들고, 무제한 배속이면 기다리지 않는다.
         // 되감기는 보통 속도처럼 프레임마다 깨어난다.
+        // 링크를 쓰는 동안에는 멈춰 있어도 깨어나 상대와 메시지를 주고받는다.
+        let linked = state.session.link_status().is_some();
         let received = match state.mode() {
-            RunMode::Paused => commands.recv().map_err(|_| RecvTimeoutError::Disconnected),
+            RunMode::Paused if !linked => {
+                commands.recv().map_err(|_| RecvTimeoutError::Disconnected)
+            }
             RunMode::Fast(FastForward::Unlimited) => commands.try_recv().map_err(|e| match e {
                 std::sync::mpsc::TryRecvError::Empty => RecvTimeoutError::Timeout,
                 std::sync::mpsc::TryRecvError::Disconnected => RecvTimeoutError::Disconnected,

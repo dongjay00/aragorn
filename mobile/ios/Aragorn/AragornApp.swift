@@ -38,6 +38,7 @@ private struct RootView: View {
             case .settings: SettingsView()
             case .debugger: DebuggerView()
             case .cheats: CheatsView()
+            case .link: LinkView()
             }
         }
         // .gb/.gbc에는 등록된 파일 형식이 없어 모든 파일을 보여 준다.

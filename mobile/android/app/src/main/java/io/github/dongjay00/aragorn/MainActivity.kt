@@ -25,6 +25,7 @@ import io.github.dongjay00.aragorn.core.InputDevice
 import io.github.dongjay00.aragorn.ui.CheatsScreen
 import io.github.dongjay00.aragorn.ui.DebuggerScreen
 import io.github.dongjay00.aragorn.ui.GameScreen
+import io.github.dongjay00.aragorn.ui.LinkScreen
 import io.github.dongjay00.aragorn.ui.SettingsScreen
 
 class MainActivity : ComponentActivity() {
@@ -118,6 +119,7 @@ private fun AragornApp(viewModel: GameViewModel, onOpenRom: () -> Unit, onOpenUr
         Page.SETTINGS -> SettingsScreen(viewModel, onBack = { viewModel.showPage(Page.GAME) })
         Page.DEBUGGER -> DebuggerScreen(viewModel, onBack = { viewModel.showPage(Page.GAME) })
         Page.CHEATS -> CheatsScreen(viewModel, onBack = { viewModel.showPage(Page.GAME) })
+        Page.LINK -> LinkScreen(viewModel, onBack = { viewModel.showPage(Page.GAME) })
     }
     UpdateDialog(update, viewModel, onDownload = { onOpenUrl(viewModel.releasePage) })
 }

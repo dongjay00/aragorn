@@ -2,6 +2,7 @@
 
 use crate::audio::{self, AudioSink};
 use crate::cheats::{self, CheatEntry};
+use crate::link::{LinkStatus, LinkTransport};
 use crate::pacing::{FastForward, FramePacer, RunMode, UNLIMITED_MAX_FRAMES};
 use crate::rewind::RewindBuffer;
 use gb_core::{Button, CartError, DebugView, GameBoy, Model};
@@ -126,6 +127,8 @@ pub struct Session {
     rewinding: bool,
     /// 이 게임의 치트 목록.
     cheats: Vec<CheatEntry>,
+    /// 링크 케이블. 연결되면 코어의 시리얼 포트를 잇는다.
+    link: Option<Box<dyn LinkTransport>>,
 }
 
 impl Session {
@@ -193,6 +196,7 @@ impl Session {
             rewind: Some(RewindBuffer::default()),
             rewinding: false,
             cheats,
+            link: None,
         })
     }
 
@@ -222,6 +226,8 @@ impl Session {
         mode: RunMode,
         keep_going: &mut dyn FnMut() -> bool,
     ) -> u32 {
+        // 일시정지 중에도 상대가 기다리지 않게 메시지는 주고받는다.
+        self.pump_link();
         self.silent = matches!(
             mode,
             RunMode::Paused | RunMode::Fast(FastForward::Unlimited) | RunMode::Rewind
@@ -229,6 +235,12 @@ impl Session {
         let speed = match mode {
             RunMode::Fast(fast) => fast.multiplier().unwrap_or(1),
             RunMode::Normal | RunMode::Paused | RunMode::Rewind => 1,
+        };
+        // 링크로 이어져 있으면 되감지 않는다. 상대와 주고받은 데이터가 어긋난다.
+        let mode = if mode == RunMode::Rewind && self.gb.is_linked() {
+            RunMode::Paused
+        } else {
+            mode
         };
         let rewinding = mode == RunMode::Rewind;
         if rewinding && !self.rewinding {
@@ -277,8 +289,11 @@ impl Session {
     }
 
     /// 한 프레임을 돌린다. 브레이크포인트에 걸려 멈췄으면 `false`.
+    /// 링크가 있으면 프레임 앞뒤로 상대와 메시지를 주고받는다.
     fn run_one_frame(&mut self) -> bool {
+        self.pump_link();
         self.gb.run_frame();
+        self.pump_link();
         self.track_battery();
         // 무제한 배속은 실제 배율을 모르므로 8배로 친다.
         let speed = if self.silent && !self.rewinding {
@@ -296,6 +311,51 @@ impl Session {
             self.breakpoint_stop = hit;
         }
         hit.is_none()
+    }
+
+    /// 링크 통로를 붙인다. 이전 통로는 끊는다. 상대와 연결되면 시리얼 포트를 잇는다.
+    pub fn set_link(&mut self, transport: Box<dyn LinkTransport>) {
+        self.disconnect_link();
+        self.link = Some(transport);
+        self.pump_link();
+    }
+
+    pub fn disconnect_link(&mut self) {
+        self.link = None;
+        self.gb.set_link(false);
+    }
+
+    /// 링크 상태. 링크를 쓰지 않으면 `None`.
+    pub fn link_status(&self) -> Option<LinkStatus> {
+        self.link.as_ref().map(|link| link.status())
+    }
+
+    /// 받은 메시지를 코어에 넣고, 코어가 낸 메시지를 보낸다. 상대가 끊으면 시리얼 포트도 끊고 알린다.
+    /// 일시정지 중에도 부른다 (상대가 기다리지 않게).
+    pub fn pump_link(&mut self) {
+        let Some(link) = &mut self.link else {
+            return;
+        };
+        match link.status() {
+            LinkStatus::Connected { .. } => {
+                if !self.gb.is_linked() {
+                    self.gb.set_link(true);
+                }
+                while let Some(message) = link.try_recv() {
+                    self.gb.link_receive(message);
+                }
+                for message in self.gb.link_outbox() {
+                    link.send(message);
+                }
+            }
+            LinkStatus::Closed { .. } => {
+                let status = link.status();
+                self.link = None;
+                self.gb.set_link(false);
+                self.errors.push(status.text());
+            }
+            LinkStatus::Waiting { .. } | LinkStatus::Connecting { .. } => {}
+        }
     }
 
     /// 되감기 스테이트 하나를 불러온다. 남은 것이 없으면 `false`.
@@ -1450,6 +1510,43 @@ mod tests {
         };
         let (mut session, _) = session_with(saving_rom(true), next);
         assert_eq!(session.resume(), Ok(true));
+    }
+
+    /// 받은 값 + 1을 돌려주는 슬레이브와 1부터 보내는 마스터 (gb-core의 링크 테스트와 같은 프로그램).
+    fn link_roms() -> (Vec<u8>, Vec<u8>) {
+        let slave = [
+            0x21, 0x00, 0xC0, 0xAF, 0xE0, 0x01, 0x3E, 0x80, 0xE0, 0x02, 0xF0, 0x02, 0xCB, 0x7F,
+            0x20, 0xFA, 0xF0, 0x01, 0x22, 0x3C, 0xE0, 0x01, 0x18, 0xEE,
+        ];
+        let master = [
+            0x21, 0x00, 0xC0, 0x06, 0x01, 0x78, 0xE0, 0x01, 0x3E, 0x81, 0xE0, 0x02, 0xF0, 0x02,
+            0xCB, 0x7F, 0x20, 0xFA, 0xF0, 0x01, 0x22, 0x04, 0x78, 0xFE, 0x11, 0x20, 0xEA, 0x18,
+            0xFE,
+        ];
+        (rom_with(0x00, 0x00, &master), rom_with(0x00, 0x00, &slave))
+    }
+
+    #[test]
+    fn linked_sessions_exchange_bytes_and_block_rewind() {
+        let (master_rom, slave_rom) = link_roms();
+        let (mut master, _) = session_with(master_rom, MemoryStore::default());
+        let (mut slave, _) = session_with(slave_rom, MemoryStore::default());
+        let (a, b) = crate::link::testing::pair();
+        master.set_link(Box::new(a));
+        slave.set_link(Box::new(b));
+        for _ in 0..60 {
+            slave.advance(FRAME_DURATION);
+            master.advance(FRAME_DURATION);
+        }
+        let got: Vec<u8> = (0..16).map(|i| slave.debug().peek(0xC000 + i)).collect();
+        assert_eq!(got, (1..=16).collect::<Vec<u8>>());
+        assert_eq!(
+            master.run(FRAME_DURATION, RunMode::Rewind, &mut || false),
+            0,
+            "링크 중에는 되감지 않는다"
+        );
+        master.disconnect_link();
+        assert_eq!(master.link_status(), None);
     }
 
     /// MBC3+TIMER+RAM+BATTERY(0x10) 판 `saving_rom(true)`.

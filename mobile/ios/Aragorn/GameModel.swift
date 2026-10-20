@@ -3,7 +3,7 @@ import Observation
 import Photos
 
 /// 앱 화면. 닫으면 게임 화면으로 돌아온다.
-enum Page { case game, settings, debugger, cheats }
+enum Page { case game, settings, debugger, cheats, link }
 
 /// 업데이트 확인 상태.
 enum UpdateState: Equatable {
@@ -59,6 +59,8 @@ final class GameModel {
     private(set) var recent: [RecentRom] = []
     /// 지금 게임의 치트 목록.
     private(set) var cheats: [CheatInfo] = []
+    /// 링크 케이블 상태 문구 (쓰지 않으면 `nil`).
+    private(set) var linkText: String?
     /// 사용자가 일시정지했는지.
     private(set) var paused = false
     /// 지금 실행 배율 (`1배`, `4배`, `일시정지`).
@@ -138,6 +140,7 @@ final class GameModel {
         case "settings": .settings
         case "debugger": .debugger
         case "cheats": .cheats
+        case "link": .link
         default: nil
         }
         guard let target else { return }
@@ -283,6 +286,8 @@ final class GameModel {
     func poll() {
         guard let emulator else { return }
         if let last = emulator.takeNotices().last { notice = last }
+        let link = emulator.linkText()
+        if link != linkText { linkText = link }
         let speed = emulator.speedText()
         if speed != speedText { speedText = speed }
         let isPaused = emulator.isPaused()
@@ -448,6 +453,21 @@ final class GameModel {
     /// 지금 방향(세로·가로)의 위치만 기본값으로 되돌린다.
     func resetPadPositions(landscape: Bool) {
         if landscape { padLayout.landscape = Self.noOffsets } else { padLayout.portrait = Self.noOffsets }
+    }
+
+    // MARK: 링크 케이블
+
+    func linkHost() {
+        guard let emulator else { return }
+        saveSetting { _ = try emulator.linkHost() }
+    }
+
+    func linkConnect(_ address: String) {
+        emulator?.linkConnect(address: address)
+    }
+
+    func linkDisconnect() {
+        emulator?.linkDisconnect()
     }
 
     // MARK: 치트

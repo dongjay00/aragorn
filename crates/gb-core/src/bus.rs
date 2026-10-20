@@ -165,6 +165,7 @@ impl Bus {
         self.cart.adopt_rom(&host.cart)?;
         self.apu.adopt_host(&host.apu);
         self.cheats = host.cheats.clone();
+        self.serial.adopt_host(&host.serial);
         // SGB 기능이 생기기 전의 스테이트: 새로 켠다. 게임이 다음 화면에서 팔레트를 다시 보낸다.
         match (&self.sgb, &host.sgb) {
             (None, Some(_)) => self.enable_sgb(),
@@ -206,6 +207,24 @@ impl Bus {
 
     pub fn serial_output(&self) -> &[u8] {
         self.serial.output()
+    }
+
+    pub(crate) fn set_link(&mut self, connected: bool) {
+        let irq = self.serial.set_link(connected);
+        self.request(INT_SERIAL, irq);
+    }
+
+    pub(crate) fn link_receive(&mut self, message: serial::LinkMessage) {
+        let irq = self.serial.receive(message);
+        self.request(INT_SERIAL, irq);
+    }
+
+    pub(crate) fn link_outbox(&mut self) -> Vec<serial::LinkMessage> {
+        self.serial.take_outbox()
+    }
+
+    pub(crate) fn is_linked(&self) -> bool {
+        self.serial.is_linked()
     }
 
     pub fn cycles(&self) -> u64 {
@@ -441,6 +460,9 @@ impl CpuBus for Bus {
 
     fn tick(&mut self) {
         self.cycles += 1;
+        if self.serial.tick() {
+            self.request(INT_SERIAL, true);
+        }
         let dots = if self.double_speed { 2 } else { 4 };
         self.dots += u64::from(dots);
         self.tick_dma();

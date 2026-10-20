@@ -5,6 +5,7 @@ pub mod cheats;
 pub mod config;
 pub mod debug;
 pub mod input;
+pub mod link;
 pub mod pacing;
 pub mod recent;
 pub mod rewind;

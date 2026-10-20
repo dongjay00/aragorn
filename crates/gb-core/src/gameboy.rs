@@ -110,6 +110,25 @@ impl GameBoy {
         self.bus.take_frame_ready();
     }
 
+    /// 링크 케이블을 잇거나 끊는다. 끊으면 끝나지 않은 전송은 0xFF를 받고 끝난다.
+    pub fn set_link(&mut self, connected: bool) {
+        self.bus.set_link(connected);
+    }
+
+    pub fn is_linked(&self) -> bool {
+        self.bus.is_linked()
+    }
+
+    /// 상대 기기가 보낸 링크 메시지를 받는다. 프레임 사이에 부른다.
+    pub fn link_receive(&mut self, message: crate::serial::LinkMessage) {
+        self.bus.link_receive(message);
+    }
+
+    /// 상대 기기에 보낼 링크 메시지를 꺼낸다. 프레임 사이에 부른다.
+    pub fn link_outbox(&mut self) -> Vec<crate::serial::LinkMessage> {
+        self.bus.link_outbox()
+    }
+
     /// 켤 치트를 바꾼다. 빈 목록이면 모두 끈다. 스테이트를 불러와도 유지한다.
     pub fn set_cheats(&mut self, cheats: &[Cheat]) {
         self.bus.set_cheats(Cheats::new(cheats));
@@ -326,6 +345,79 @@ mod tests {
         let mut gb = gb_with_program(&[0x3C]); // INC A
         gb.step();
         assert_eq!(gb.debug().registers().pc, 0x0101);
+    }
+
+    /// 받은 바이트에 1을 더해 다음에 돌려줄 값으로 두는 슬레이브. 받은 바이트는 0xC000부터 적는다.
+    const SLAVE: [u8; 26] = [
+        0x21, 0x00, 0xC0, 0xAF, 0xE0, 0x01, // LD HL,C000 ; SB=0
+        0x3E, 0x80, 0xE0, 0x02, // loop: SC=0x80 (외부 클럭으로 받을 준비)
+        0xF0, 0x02, 0xCB, 0x7F, 0x20, 0xFA, // 끝날 때까지 SC 비트 7을 본다
+        0xF0, 0x01, 0x22, 0x3C, 0xE0, 0x01, // 받은 값을 적고, 1을 더해 SB에
+        0x18, 0xEE, 0x00, 0x00, // JR loop
+    ];
+    /// 1부터 16까지 보내고 받은 바이트를 0xC000부터 적는 마스터.
+    const MASTER: [u8; 29] = [
+        0x21, 0x00, 0xC0, 0x06, 0x01, // LD HL,C000 ; LD B,1
+        0x78, 0xE0, 0x01, 0x3E, 0x81, 0xE0,
+        0x02, // loop: SB=B ; SC=0x81 (내부 클럭으로 보냄)
+        0xF0, 0x02, 0xCB, 0x7F, 0x20, 0xFA, // 끝날 때까지 기다린다
+        0xF0, 0x01, 0x22, 0x04, 0x78, 0xFE, 0x11, 0x20,
+        0xEA, // 적고 B+1, 17이 아니면 다시
+        0x18, 0xFE,
+    ];
+
+    fn linked_pair() -> (GameBoy, GameBoy) {
+        let (mut master, mut slave) = (gb_with_program(&MASTER), gb_with_program(&SLAVE));
+        master.set_link(true);
+        slave.set_link(true);
+        (master, slave)
+    }
+
+    /// 프레임마다 두 기기를 돌리고 그 사이에 메시지를 전한다. `slave_first`면 받는 쪽이 먼저 돈다.
+    fn run_linked(master: &mut GameBoy, slave: &mut GameBoy, frames: usize, slave_first: bool) {
+        for _ in 0..frames {
+            if slave_first {
+                slave.run_frame();
+                master.run_frame();
+            } else {
+                master.run_frame();
+                slave.run_frame();
+            }
+            for message in master.link_outbox() {
+                slave.link_receive(message);
+            }
+            for message in slave.link_outbox() {
+                master.link_receive(message);
+            }
+        }
+    }
+
+    fn written(gb: &GameBoy, count: u16) -> Vec<u8> {
+        (0..count).map(|i| gb.debug().peek(0xC000 + i)).collect()
+    }
+
+    #[test]
+    fn linked_game_boys_exchange_bytes_through_the_serial_port() {
+        for slave_first in [true, false] {
+            let (mut master, mut slave) = linked_pair();
+            run_linked(&mut master, &mut slave, 60, slave_first);
+            assert_eq!(
+                written(&slave, 16),
+                (1..=16).collect::<Vec<u8>>(),
+                "{slave_first}"
+            );
+            // 처음에는 슬레이브가 준비한 0, 그 뒤로는 슬레이브가 받은 값 + 1
+            let mut expected = vec![0];
+            expected.extend(2..=16);
+            assert_eq!(written(&master, 16), expected, "{slave_first}");
+        }
+    }
+
+    #[test]
+    fn unlinked_master_reads_ff() {
+        let mut master = gb_with_program(&MASTER);
+        master.run_frame();
+        assert_eq!(written(&master, 2), [0xFF, 0xFF]);
     }
 
     #[test]
