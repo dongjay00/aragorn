@@ -192,6 +192,28 @@ fun SettingsScreen(viewModel: GameViewModel, onBack: () -> Unit) {
                     )
                 }
 
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text("슈퍼 게임보이 색")
+                        Text(
+                            "포켓몬 레드·블루·옐로처럼 슈퍼 게임보이를 지원하는 게임에 게임이 정한 색을 입힙니다. " +
+                                "끄면 위의 흑백 게임 색을 씁니다.",
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    }
+                    Switch(
+                        checked = video.sgbColors,
+                        onCheckedChange = { viewModel.setVideo(video.copy(sgbColors = it)) },
+                    )
+                }
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("슈퍼 게임보이 테두리", Modifier.weight(1f))
+                    Switch(
+                        checked = video.sgbBorder,
+                        onCheckedChange = { viewModel.setVideo(video.copy(sgbBorder = it)) },
+                    )
+                }
+
                 Section("가상 패드")
                 PadSlider("크기", pad.scale, 0.7f..1.4f, percent(pad.scale)) {
                     viewModel.setPadLayout(pad.copy(scale = it))
@@ -206,7 +228,10 @@ fun SettingsScreen(viewModel: GameViewModel, onBack: () -> Unit) {
                 DisposableEffect(Unit) {
                     onDispose { viewModel.savePadLayout() }
                 }
-                TextButton(onClick = viewModel::resetPadLayout) { Text("가상 패드를 기본값으로") }
+                Row {
+                    TextButton(onClick = viewModel::startPadEdit) { Text("위치 편집") }
+                    TextButton(onClick = viewModel::resetPadLayout) { Text("가상 패드를 기본값으로") }
+                }
 
                 Section("소리와 햅틱")
                 Row(verticalAlignment = Alignment.CenterVertically) {

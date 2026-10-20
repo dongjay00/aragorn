@@ -33,6 +33,9 @@ impl std::error::Error for CartError {}
 pub struct Header {
     pub title: String,
     pub cgb_flag: u8,
+    /// 0x03이면 슈퍼 게임보이 기능을 쓴다 (예전 라이선스 코드가 0x33일 때만 유효).
+    pub sgb_flag: u8,
+    pub old_licensee: u8,
     pub cart_type: u8,
     pub rom_size_code: u8,
     pub ram_size_code: u8,
@@ -40,6 +43,11 @@ pub struct Header {
 }
 
 impl Header {
+    /// 슈퍼 게임보이 기능(팔레트, 테두리)을 쓰는 게임인지.
+    pub fn supports_sgb(&self) -> bool {
+        self.sgb_flag == 0x03 && self.old_licensee == 0x33
+    }
+
     pub fn parse(rom: &[u8]) -> Result<Header, CartError> {
         if rom.len() < HEADER_END {
             return Err(CartError::TooSmall(rom.len()));
@@ -52,6 +60,8 @@ impl Header {
         Ok(Header {
             title,
             cgb_flag: rom[0x0143],
+            sgb_flag: rom[0x0146],
+            old_licensee: rom[0x014B],
             cart_type: rom[0x0147],
             rom_size_code: rom[0x0148],
             ram_size_code: rom[0x0149],

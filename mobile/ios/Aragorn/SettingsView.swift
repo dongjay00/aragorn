@@ -76,16 +76,19 @@ struct SettingsView: View {
                     }
                     Toggle("컬러 게임 색 보정", isOn: videoBinding(\.colorCorrection))
                     Toggle("LCD 격자", isOn: videoBinding(\.lcdGrid))
+                    Toggle("슈퍼 게임보이 색", isOn: videoBinding(\.sgbColors))
+                    Toggle("슈퍼 게임보이 테두리", isOn: videoBinding(\.sgbBorder))
                 } header: {
                     Text("화면")
                 } footer: {
-                    Text("색 보정은 게임보이 컬러 화면처럼 색을 덜 진하게 합니다. LCD 격자는 픽셀 사이에 선을 그립니다.")
+                    Text("색 보정은 게임보이 컬러 화면처럼 색을 덜 진하게 합니다. LCD 격자는 픽셀 사이에 선을 그립니다. 슈퍼 게임보이 색은 포켓몬 레드·블루·옐로처럼 슈퍼 게임보이를 지원하는 게임에 게임이 정한 색을 입힙니다. 끄면 흑백 게임 색을 씁니다.")
                 }
 
                 Section {
                     padSlider("크기", \.scale, 0.7...1.4)
                     padSlider("불투명도", \.opacity, 0.2...1)
                     padSlider("높이", \.lift, 0...1)
+                    Button("위치 편집", action: model.startPadEdit)
                     Button("가상 패드를 기본값으로", action: model.resetPadLayout)
                 } header: {
                     Text("가상 패드")

@@ -115,7 +115,28 @@ pub struct PadLayout {
     pub opacity: f32,
     /// 화면 아래에서 띄우는 정도 (0–1). 1이면 앱이 정한 최대 높이만큼 올린다.
     pub lift: f32,
+    /// "패드 위치 편집"으로 옮긴 거리. 세로·가로 화면마다 따로 둔다.
+    pub portrait: PadOffsets,
+    pub landscape: PadOffsets,
 }
+
+/// 버튼 묶음마다 기본 자리에서 옮긴 거리 (dp·pt, 오른쪽·아래가 양수).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize, uniffi::Record)]
+#[serde(default)]
+pub struct PadOffsets {
+    pub dpad_x: f32,
+    pub dpad_y: f32,
+    /// A/B와 배속·되감기
+    pub buttons_x: f32,
+    pub buttons_y: f32,
+    pub select_x: f32,
+    pub select_y: f32,
+    pub start_x: f32,
+    pub start_y: f32,
+}
+
+/// 옮길 수 있는 최대 거리. 화면 밖으로 사라지지 않게 한다.
+const MAX_OFFSET: f32 = 600.0;
 
 impl Default for PadLayout {
     fn default() -> Self {
@@ -123,23 +144,44 @@ impl Default for PadLayout {
             scale: 1.0,
             opacity: 1.0,
             lift: 0.0,
+            portrait: PadOffsets::default(),
+            landscape: PadOffsets::default(),
+        }
+    }
+}
+
+fn clamp(v: f32, lo: f32, hi: f32, default: f32) -> f32 {
+    if v.is_finite() {
+        v.clamp(lo, hi)
+    } else {
+        default
+    }
+}
+
+impl PadOffsets {
+    fn clamped(self) -> Self {
+        let c = |v: f32| clamp(v, -MAX_OFFSET, MAX_OFFSET, 0.0);
+        Self {
+            dpad_x: c(self.dpad_x),
+            dpad_y: c(self.dpad_y),
+            buttons_x: c(self.buttons_x),
+            buttons_y: c(self.buttons_y),
+            select_x: c(self.select_x),
+            select_y: c(self.select_y),
+            start_x: c(self.start_x),
+            start_y: c(self.start_y),
         }
     }
 }
 
 impl PadLayout {
     fn clamped(self) -> Self {
-        let clamp = |v: f32, lo: f32, hi: f32, default: f32| {
-            if v.is_finite() {
-                v.clamp(lo, hi)
-            } else {
-                default
-            }
-        };
         Self {
             scale: clamp(self.scale, 0.7, 1.4, 1.0),
             opacity: clamp(self.opacity, 0.2, 1.0, 1.0),
             lift: clamp(self.lift, 0.0, 1.0, 0.0),
+            portrait: self.portrait.clamped(),
+            landscape: self.landscape.clamped(),
         }
     }
 }
@@ -561,10 +603,18 @@ mod tests {
                 scale: 3.0,
                 opacity: 0.5,
                 lift: f32::NAN,
+                portrait: PadOffsets {
+                    dpad_x: 40.0,
+                    start_y: -9999.0,
+                    ..PadOffsets::default()
+                },
+                landscape: PadOffsets::default(),
             })
             .unwrap();
         let layout = open(&dir).pad_layout();
         assert_eq!((layout.scale, layout.opacity, layout.lift), (1.4, 0.5, 0.0));
+        assert_eq!(layout.portrait.dpad_x, 40.0);
+        assert_eq!(layout.portrait.start_y, -MAX_OFFSET);
     }
 
     #[test]
@@ -577,6 +627,8 @@ mod tests {
                 palette: Palette::Gray,
                 color_correction: true,
                 lcd_grid: true,
+                sgb_colors: false,
+                sgb_border: true,
             })
             .unwrap();
         settings.set_rewind_enabled(false).unwrap();

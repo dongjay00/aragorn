@@ -38,15 +38,18 @@ struct GameView: View {
                 : (geometry.size.width - 32) / portraitPadWidth
             let scale = min(CGFloat(pad.scale), max(fit, 0.5))
             let opacity = Double(pad.opacity)
+            let offsets = landscape ? pad.landscape : pad.portrait
             VStack(spacing: 0) {
-                toolbar
+                if model.editingPad { editBar(landscape: landscape) } else { toolbar }
                 if landscape {
                     HStack {
                         VStack {
                             Spacer()
-                            DPad(onButton: model.setButton)
+                            movable(.dpad, offsets, landscape) { DPad(onButton: model.setButton) }
                             Spacer()
-                            PadButton(label: "SELECT", button: .select, shape: .pill)
+                            movable(.select, offsets, landscape) {
+                                PadButton(label: "SELECT", button: .select, shape: .pill)
+                            }
                         }
                         .padding(.bottom, lift)
                         .opacity(opacity)
@@ -58,9 +61,11 @@ struct GameView: View {
                         .frame(width: lcdWidth)
                         VStack {
                             Spacer()
-                            ActionButtons()
+                            movable(.buttons, offsets, landscape) { ActionButtons() }
                             Spacer()
-                            PadButton(label: "START", button: .start, shape: .pill)
+                            movable(.start, offsets, landscape) {
+                                PadButton(label: "START", button: .start, shape: .pill)
+                            }
                         }
                         .padding(.bottom, lift)
                         .opacity(opacity)
@@ -72,15 +77,19 @@ struct GameView: View {
                     status
                     Spacer()
                     HStack {
-                        DPad(onButton: model.setButton)
+                        movable(.dpad, offsets, landscape) { DPad(onButton: model.setButton) }
                         Spacer()
-                        ActionButtons()
+                        movable(.buttons, offsets, landscape) { ActionButtons() }
                     }
                     .opacity(opacity)
                     .padding(.bottom, 24)
                     HStack(spacing: 16) {
-                        PadButton(label: "SELECT", button: .select, shape: .pill)
-                        PadButton(label: "START", button: .start, shape: .pill)
+                        movable(.select, offsets, landscape) {
+                            PadButton(label: "SELECT", button: .select, shape: .pill)
+                        }
+                        movable(.start, offsets, landscape) {
+                            PadButton(label: "START", button: .start, shape: .pill)
+                        }
                     }
                     .opacity(opacity)
                     .padding(.bottom, 24 + lift)
@@ -92,6 +101,38 @@ struct GameView: View {
         .background(bodyColor.ignoresSafeArea())
         .preferredColorScheme(.dark)
         .sheet(isPresented: $slotsOpen) { SlotsView() }
+    }
+
+    /// 편집 중에 툴바 자리에 보이는 줄.
+    private func editBar(landscape: Bool) -> some View {
+        HStack {
+            Text("버튼 묶음을 끌어 옮기세요").foregroundStyle(.white)
+            Spacer()
+            Button("초기화") { model.resetPadPositions(landscape: landscape) }
+            Button("완료", action: model.finishPadEdit).bold()
+        }
+        .buttonStyle(.borderless)
+        .padding(.vertical, 8)
+    }
+
+    /// 기본 자리에서 옮겨 그린 버튼 묶음. 편집 중에는 위에 덮개를 씌워 버튼 대신 끌기를 받는다.
+    private func movable(
+        _ group: PadGroup, _ offsets: PadOffsets, _ landscape: Bool, @ViewBuilder content: () -> some View
+    ) -> some View {
+        let (x, y): (Float, Float) = switch group {
+        case .dpad: (offsets.dpadX, offsets.dpadY)
+        case .buttons: (offsets.buttonsX, offsets.buttonsY)
+        case .select: (offsets.selectX, offsets.selectY)
+        case .start: (offsets.startX, offsets.startY)
+        }
+        return content()
+            .allowsHitTesting(!model.editingPad)
+            .overlay {
+                if model.editingPad {
+                    PadEditHandle { model.movePad(landscape: landscape, group: group, by: $0) }
+                }
+            }
+            .offset(x: CGFloat(x), y: CGFloat(y))
     }
 
     private var toolbar: some View {
@@ -123,6 +164,7 @@ struct GameView: View {
                     .disabled(model.emulator == nil)
                 Button("처음부터 다시 시작", action: model.restart)
                     .disabled(model.emulator == nil)
+                Button("패드 위치 편집", action: model.startPadEdit)
                 Button("치트") { model.page = .cheats }
                     .disabled(model.emulator == nil)
                 Button("디버거") { model.page = .debugger }
@@ -138,9 +180,10 @@ struct GameView: View {
 
     @ViewBuilder private var screen: some View {
         if let emulator = model.emulator {
-            LcdView(emulator: emulator, onFrame: model.poll)
-                .aspectRatio(160 / 144, contentMode: .fit)
-                .overlay { if model.video.lcdGrid { LcdGrid() } }
+            LcdView(emulator: emulator, onFrame: model.poll, onSize: model.setFrameSize)
+                .aspectRatio(model.frameSize.width / model.frameSize.height, contentMode: .fit)
+                // 테두리를 그리면 격자를 그리지 않는다 (게임 화면만 LCD다).
+                .overlay { if model.video.lcdGrid && model.frameSize.width == 160 { LcdGrid() } }
         } else {
             Rectangle()
                 .fill(.black)
@@ -183,6 +226,31 @@ struct GameView: View {
         .font(.caption)
         .foregroundStyle(.secondary)
         .padding(.vertical, 6)
+    }
+}
+
+/// 편집 중 버튼 묶음 위의 덮개. 끈 거리만큼 묶음을 옮긴다.
+private struct PadEditHandle: View {
+    let onMove: (CGSize) -> Void
+    @State private var last = CGSize.zero
+
+    var body: some View {
+        RoundedRectangle(cornerRadius: 8)
+            .fill(Color.yellow.opacity(0.15))
+            .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.yellow, lineWidth: 2))
+            .contentShape(Rectangle())
+            .gesture(
+                DragGesture(minimumDistance: 0, coordinateSpace: .global)
+                    .onChanged { value in
+                        let delta = CGSize(
+                            width: value.translation.width - last.width,
+                            height: value.translation.height - last.height
+                        )
+                        last = value.translation
+                        onMove(delta)
+                    }
+                    .onEnded { _ in last = .zero }
+            )
     }
 }
 

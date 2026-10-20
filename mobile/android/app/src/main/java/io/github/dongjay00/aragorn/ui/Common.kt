@@ -6,6 +6,9 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.withFrameNanos
@@ -48,7 +51,9 @@ fun rgbaColor(rgba: UInt): Color {
 
 /**
  * 게임 화면. 디스플레이 갱신(vsync)마다 프레임 번호를 보고, 바뀌었을 때만 픽셀을 가져와 그린다.
+ * 슈퍼 게임보이 테두리를 그리면 화면이 256×224로 바뀌므로 크기가 바뀔 때 비트맵을 다시 만든다.
  * 확대할 때 픽셀이 뭉개지지 않게 가장 가까운 이웃으로 늘린다. `onFrame`은 화면 갱신마다 부른다.
+ * LCD 격자는 테두리가 없을 때만 그린다.
  */
 @Composable
 fun LcdScreen(
@@ -57,9 +62,9 @@ fun LcdScreen(
     grid: Boolean = false,
     onFrame: () -> Unit = {},
 ) {
-    val size = remember { screenSize() }
-    val bitmap = remember {
-        Bitmap.createBitmap(size.width.toInt(), size.height.toInt(), Bitmap.Config.ARGB_8888)
+    val initial = remember { screenSize() }
+    var bitmap by remember {
+        mutableStateOf(Bitmap.createBitmap(initial.width.toInt(), initial.height.toInt(), Bitmap.Config.ARGB_8888))
     }
     val image = remember(bitmap) { bitmap.asImageBitmap() }
     // 다시 그리기를 일으키는 용도. 값 자체는 쓰지 않는다.
@@ -71,15 +76,20 @@ fun LcdScreen(
             val number = emulator.frameNumber()
             if (number != shown) {
                 shown = number
-                bitmap.copyPixelsFromBuffer(ByteBuffer.wrap(emulator.frame()))
+                val frame = emulator.frame()
+                if (frame.width.toInt() != bitmap.width || frame.height.toInt() != bitmap.height) {
+                    bitmap = Bitmap.createBitmap(frame.width.toInt(), frame.height.toInt(), Bitmap.Config.ARGB_8888)
+                }
+                bitmap.copyPixelsFromBuffer(ByteBuffer.wrap(frame.rgba))
                 redraw.intValue++
             }
             onFrame()
         }
     }
+    val bordered = image.width != initial.width.toInt()
     Canvas(
         modifier
-            .aspectRatio(size.width.toFloat() / size.height.toFloat())
+            .aspectRatio(image.width.toFloat() / image.height.toFloat())
             .background(Color.Black),
     ) {
         redraw.intValue
@@ -90,7 +100,7 @@ fun LcdScreen(
             dstSize = IntSize(this.size.width.toInt(), this.size.height.toInt()),
             filterQuality = FilterQuality.None,
         )
-        if (grid) drawLcdGrid(image.width, image.height)
+        if (grid && !bordered) drawLcdGrid(image.width, image.height)
     }
 }
 

@@ -211,4 +211,26 @@ final class AragornUITests: XCTestCase {
         openMenu("처음부터 다시 시작")
         XCTAssertTrue(notice.wait(for: \.label, toEqual: "ARAGORN TEST 실행 중", timeout: 10), "처음부터")
     }
+
+    func testPadGroupsCanBeDraggedAndKept() {
+        let a = element("pad.A")
+        let before = a.frame
+        openMenu("패드 위치 편집")
+        XCTAssertTrue(app.buttons["완료"].waitForExistence(timeout: 5))
+        let start = a.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+        start.press(forDuration: 0.1, thenDragTo: start.withOffset(CGVector(dx: -60, dy: -80)))
+        app.buttons["완료"].tap()
+        XCTAssertTrue(app.buttons["스테이트"].waitForExistence(timeout: 5))
+        XCTAssertLessThan(a.frame.midY, before.midY - 40, "위로 옮겼다")
+
+        app.terminate()
+        app.launch()
+        XCTAssertTrue(gameStarted())
+        XCTAssertLessThan(element("pad.A").frame.midY, before.midY - 40, "다시 열어도 그 자리")
+        // 다음 테스트를 위해 되돌린다.
+        openMenu("패드 위치 편집")
+        app.buttons["초기화"].tap()
+        app.buttons["완료"].tap()
+        XCTAssertEqual(element("pad.A").frame.midY, before.midY, accuracy: 2)
+    }
 }
