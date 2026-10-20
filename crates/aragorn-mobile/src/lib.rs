@@ -860,11 +860,17 @@ mod tests {
             assert!(Instant::now() < deadline, "상대가 끊은 것을 알아야 한다");
             thread::sleep(Duration::from_millis(20));
         }
-        let notices = host.take_notices();
-        assert!(
-            notices.iter().any(|n| n.starts_with("링크가 끊겼습니다")),
-            "{notices:?}"
-        );
+        // 안내 문구는 에뮬레이터 스레드가 다음 차례에 넘긴다.
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let mut notices = Vec::new();
+        while !notices
+            .iter()
+            .any(|n: &String| n.starts_with("링크가 끊겼습니다"))
+        {
+            assert!(Instant::now() < deadline, "{notices:?}");
+            notices.extend(host.take_notices());
+            thread::sleep(Duration::from_millis(20));
+        }
     }
 
     #[test]
