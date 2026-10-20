@@ -2,7 +2,7 @@ import Foundation
 import Observation
 
 /// 앱 화면. 닫으면 게임 화면으로 돌아온다.
-enum Page { case game, settings, debugger }
+enum Page { case game, settings, debugger, cheats }
 
 /// 업데이트 확인 상태.
 enum UpdateState: Equatable {
@@ -40,6 +40,15 @@ final class GameModel {
     private(set) var muted: Bool
     /// 가상 패드를 누를 때 햅틱을 낼지.
     private(set) var haptics: Bool
+    /// 화면 필터 (팔레트, 색 보정, LCD 격자).
+    private(set) var video: VideoSettings
+    private(set) var rewindEnabled: Bool
+    /// 가상 패드 크기·불투명도·높이.
+    var padLayout: PadLayout
+    /// 최근에 연 게임, 최근 것부터.
+    private(set) var recent: [RecentRom] = []
+    /// 지금 게임의 치트 목록.
+    private(set) var cheats: [CheatInfo] = []
     /// 사용자가 일시정지했는지.
     private(set) var paused = false
     /// 지금 실행 배율 (`1배`, `4배`, `일시정지`).
@@ -61,11 +70,15 @@ final class GameModel {
     @ObservationIgnored private var visible = false
     @ObservationIgnored private var fastTouch = false
     @ObservationIgnored private var fastKey = false
+    @ObservationIgnored private var rewindTouch = false
+    @ObservationIgnored private var rewindKey = false
     @ObservationIgnored private var lastAutoCheck: Date?
     private static let recheckInterval: TimeInterval = 6 * 60 * 60
 
     /// 세이브 폴더. 파일 앱의 "나의 iPhone › Aragorn › saves"에 보여 데스크톱과 주고받을 수 있다.
     nonisolated static let savesDirectory = URL.documentsDirectory.appending(path: "saves", directoryHint: .isDirectory)
+    /// 연 ROM을 복사해 두는 폴더. 최근 게임을 다시 열 때 쓴다. 파일 앱에서 ROM을 직접 넣을 수도 있다.
+    nonisolated static let romsDirectory = URL.documentsDirectory.appending(path: "roms", directoryHint: .isDirectory)
 
     init() {
         let support = URL.applicationSupportDirectory
@@ -75,6 +88,15 @@ final class GameModel {
         haptics = settings.haptics()
         baseSpeed = settings.baseSpeed()
         fastSpeed = settings.fastSpeed()
+        video = settings.video()
+        rewindEnabled = settings.rewindEnabled()
+        padLayout = settings.padLayout()
+        // 지운 ROM이나 예전 앱 폴더를 가리키는 항목은 뺀다.
+        for game in settings.recentGames()
+        where !FileManager.default.fileExists(atPath: Self.recentURL(game.path).path) {
+            try? settings.removeRecent(path: game.path)
+        }
+        recent = settings.recentGames()
         input = GameInput { [weak self] device, name, pressed in
             self?.onKey(device: device, name: name, pressed: pressed)
         }
@@ -102,12 +124,13 @@ final class GameModel {
         let target: Page? = switch defaults.string(forKey: "page") {
         case "settings": .settings
         case "debugger": .debugger
+        case "cheats": .cheats
         default: nil
         }
         guard let target else { return }
-        // 디버거는 게임이 있어야 열린다. ROM이 열릴 때까지 기다린다.
+        // 디버거와 치트는 게임이 있어야 열린다. ROM이 열릴 때까지 기다린다.
         Task {
-            for _ in 0..<50 where target == .debugger && emulator == nil {
+            for _ in 0..<50 where target != .settings && emulator == nil {
                 try? await Task.sleep(for: .milliseconds(100))
             }
             page = target
@@ -117,27 +140,72 @@ final class GameModel {
 
     // MARK: ROM
 
-    /// 파일 선택기로 고른 ROM을 연다. 세이브는 `Documents/saves/<ROM 파일 이름>` 옆에 둔다.
+    /// 파일 선택기로 고른 ROM을 연다. 최근 게임으로 다시 열 수 있게 `Documents/roms/`에 복사해 두고,
+    /// 세이브는 `Documents/saves/<ROM 파일 이름>` 옆에 둔다.
     func openRom(_ url: URL) {
+        startGame {
+            let accessing = url.startAccessingSecurityScopedResource()
+            defer { if accessing { url.stopAccessingSecurityScopedResource() } }
+            let rom = try Data(contentsOf: url)
+            let name = url.lastPathComponent.replacingOccurrences(of: "/", with: "_")
+            let copy = Self.romsDirectory.appending(path: name)
+            // 이미 roms/ 안의 파일을 고른 경우에는 그대로 쓴다.
+            if copy.standardizedFileURL != url.standardizedFileURL {
+                try FileManager.default.createDirectory(at: Self.romsDirectory, withIntermediateDirectories: true)
+                try rom.write(to: copy, options: .atomic)
+            }
+            return (rom, copy)
+        }
+    }
+
+    /// 최근 게임을 다시 연다. 복사해 둔 ROM이 없으면 목록에서 뺀다.
+    func openRecent(_ path: String) {
+        let url = Self.recentURL(path)
+        guard FileManager.default.fileExists(atPath: url.path) else {
+            saveSetting { try self.settings.removeRecent(path: path) }
+            recent = settings.recentGames()
+            notice = "ROM 파일이 없어 최근 목록에서 뺐습니다"
+            return
+        }
+        startGame {
+            (try Data(contentsOf: url), url)
+        }
+    }
+
+    /// 최근 목록에는 `Documents` 기준 상대 경로(`roms/<이름>`)를 저장한다. 앱을 다시 설치하거나 업데이트하면
+    /// 앱 폴더의 절대 경로가 바뀌기 때문이다.
+    nonisolated static func recentPath(_ url: URL) -> String {
+        let documents = URL.documentsDirectory.standardizedFileURL.path + "/"
+        let path = url.standardizedFileURL.path
+        return path.hasPrefix(documents) ? String(path.dropFirst(documents.count)) : path
+    }
+
+    nonisolated static func recentURL(_ path: String) -> URL {
+        path.hasPrefix("/") ? URL(filePath: path) : URL.documentsDirectory.appending(path: path)
+    }
+
+    /// `load`가 읽은 ROM으로 게임을 시작하고 최근 목록 맨 앞에 넣는다.
+    private func startGame(_ load: @escaping @Sendable () throws -> (Data, URL)) {
         let previous = emulator
         Task {
             do {
-                let (emulator, name) = try await Task.detached {
-                    let accessing = url.startAccessingSecurityScopedResource()
-                    defer { if accessing { url.stopAccessingSecurityScopedResource() } }
-                    let rom = try Data(contentsOf: url)
-                    let name = url.lastPathComponent.replacingOccurrences(of: "/", with: "_")
+                let (emulator, file) = try await Task.detached {
+                    let (rom, file) = try load()
                     // 같은 ROM을 다시 열면 새 세션이 세이브를 읽기 전에 지금 진행을 저장해 둔다.
                     _ = previous?.flush()
-                    let savePath = Self.savesDirectory.appending(path: name).path
-                    return (try Emulator(rom: rom, savePath: savePath), name)
+                    let savePath = Self.savesDirectory.appending(path: file.lastPathComponent).path
+                    return (try Emulator(rom: rom, savePath: savePath), file)
                 }.value
                 previous?.stop()
                 configure(emulator)
                 self.emulator = emulator
                 // 헤더에 제목이 없는 ROM(테스트 ROM 등)은 파일 이름을 보인다.
-                let title = emulator.title()
-                notice = "\(title.isEmpty ? name : title) 실행 중"
+                let name = file.lastPathComponent
+                let title = emulator.title().isEmpty ? name : emulator.title()
+                notice = "\(title) 실행 중"
+                saveSetting { try self.settings.addRecent(path: Self.recentPath(file), title: title) }
+                recent = settings.recentGames()
+                cheats = emulator.cheats()
                 refreshSlots()
             } catch {
                 notice = Self.message(error) ?? "ROM을 열 수 없습니다"
@@ -150,6 +218,9 @@ final class GameModel {
         emulator.setSpeed(base: baseSpeed, fast: fastSpeed)
         emulator.setMuted(muted: muted)
         emulator.setFastHeld(held: fastTouch || fastKey)
+        emulator.setRewindHeld(held: rewindTouch || rewindKey)
+        emulator.setRewindEnabled(enabled: rewindEnabled)
+        emulator.setVideo(video: video)
         emulator.setBreakpoints(pcs: breakpoints)
         for (channel, muted) in channelMuted.enumerated() {
             emulator.setChannelMuted(channel: UInt8(channel), muted: muted)
@@ -194,6 +265,12 @@ final class GameModel {
         emulator?.setFastHeld(held: fastTouch || fastKey)
     }
 
+    /// 화면의 되감기 버튼 (누르는 동안).
+    func setRewindTouch(_ held: Bool) {
+        rewindTouch = held
+        emulator?.setRewindHeld(held: rewindTouch || rewindKey)
+    }
+
     /// 키보드·게임패드 입력. 키 설정 중이면 그 칸에 지정하고, 아니면 지정된 기능을 실행한다.
     func onKey(device: InputDevice, name: String, pressed: Bool) {
         if device == .keyboard, let slot = GameInput.slotKeys.firstIndex(of: name) {
@@ -211,6 +288,9 @@ final class GameModel {
             } else if action == .fastForward {
                 fastKey = pressed
                 emulator?.setFastHeld(held: fastTouch || fastKey)
+            } else if action == .rewind {
+                rewindKey = pressed
+                emulator?.setRewindHeld(held: rewindTouch || rewindKey)
             } else if pressed, action == .pause {
                 togglePause()
             } else if pressed, action == .mute {
@@ -245,6 +325,61 @@ final class GameModel {
     func setHaptics(_ value: Bool) {
         haptics = value
         saveSetting { try self.settings.setHaptics(on: value) }
+    }
+
+    func setVideo(_ value: VideoSettings) {
+        video = value
+        emulator?.setVideo(video: value)
+        saveSetting { try self.settings.setVideo(video: value) }
+    }
+
+    func setRewindEnabled(_ value: Bool) {
+        rewindEnabled = value
+        emulator?.setRewindEnabled(enabled: value)
+        saveSetting { try self.settings.setRewindEnabled(on: value) }
+    }
+
+    /// 슬라이더를 놓았을 때 부른다. 움직이는 동안에는 `padLayout`만 바꾼다.
+    func savePadLayout() {
+        saveSetting { try self.settings.setPadLayout(layout: self.padLayout) }
+        padLayout = settings.padLayout()
+    }
+
+    func resetPadLayout() {
+        padLayout = PadLayout(scale: 1, opacity: 1, lift: 0)
+        savePadLayout()
+    }
+
+    // MARK: 치트
+
+    /// 더했으면 `true`. 코드가 틀리면 안내 문구로 이유를 보인다.
+    @discardableResult
+    func addCheat(code: String, name: String) -> Bool {
+        let ok = cheatChange { try $0.addCheat(code: code, name: name) }
+        if ok { notice = "치트를 켰습니다" }
+        return ok
+    }
+
+    func setCheatEnabled(_ index: Int, _ enabled: Bool) {
+        cheatChange { try $0.setCheatEnabled(index: UInt32(index), enabled: enabled) }
+    }
+
+    func removeCheat(_ index: Int) {
+        cheatChange { try $0.removeCheat(index: UInt32(index)) }
+    }
+
+    @discardableResult
+    private func cheatChange(_ change: (Emulator) throws -> Void) -> Bool {
+        guard let emulator else { return false }
+        var ok = true
+        do {
+            try change(emulator)
+        } catch {
+            notice = Self.message(error)
+            ok = false
+        }
+        cheats = emulator.cheats()
+        return ok
     }
 
     func setBaseSpeed(_ speed: Speed) {
