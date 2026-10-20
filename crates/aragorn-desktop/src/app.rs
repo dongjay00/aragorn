@@ -879,6 +879,50 @@ mod tests {
         assert_eq!(reloaded.battery_ram().unwrap()[0], 0x42);
     }
 
+    /// 저장한 설정을 테스트가 볼 수 있는 저장소.
+    #[derive(Clone, Default)]
+    struct MemoryConfig(std::rc::Rc<std::cell::RefCell<Option<Config>>>);
+
+    impl ConfigStore for MemoryConfig {
+        fn load(&self) -> Config {
+            self.0.borrow().clone().unwrap_or_default()
+        }
+        fn save(&self, config: &Config) -> std::io::Result<()> {
+            *self.0.borrow_mut() = Some(config.clone());
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn opened_rom_goes_to_recent_games_and_missing_one_leaves() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("game.gb");
+        let mut rom = vec![0u8; 0x8000];
+        rom[0x0100..0x0102].copy_from_slice(&[0x18, 0xFE]);
+        rom[0x0134..0x0138].copy_from_slice(b"GAME");
+        std::fs::write(&path, &rom).unwrap();
+        let store = MemoryConfig::default();
+        let ctx = egui::Context::default();
+        let mut app = AragornApp::new(
+            &ctx,
+            AppDeps {
+                config_store: Box::new(store.clone()),
+                source: None,
+                updater: None,
+                release_page: None,
+                initial_rom: Some(path.clone()),
+            },
+        );
+        let saved = store.load();
+        assert_eq!(saved.recent.len(), 1);
+        assert_eq!(saved.recent[0].title, "GAME");
+
+        std::fs::remove_file(&path).unwrap();
+        let canonical = PathBuf::from(&saved.recent[0].path);
+        app.open_rom(&ctx, &canonical);
+        assert!(store.load().recent.is_empty(), "지운 파일은 목록에서 뺀다");
+    }
+
     #[test]
     fn failed_save_warns_once_before_discarding() {
         let mut warned = false;
