@@ -251,7 +251,7 @@ impl Sgb {
     /// `ATTR_BLK`: 사각형 안·테두리·바깥에 팔레트를 지정한다.
     fn attr_block(&mut self, data: &[u8]) {
         let sets = usize::from(data[1]).min(18);
-        for set in data[2..].chunks_exact(6).take(sets) {
+        for set in data[2..].as_chunks::<6>().0.iter().take(sets) {
             let control = set[0];
             let (inside, line, outside) = (set[1] & 3, (set[1] >> 2) & 3, (set[1] >> 4) & 3);
             let (x1, y1) = (usize::from(set[2] & 0x1F), usize::from(set[3] & 0x1F));
