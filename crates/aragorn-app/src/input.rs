@@ -24,10 +24,12 @@ pub enum Action {
     Pause,
     /// 누를 때마다 음소거 켜기/끄기
     Mute,
+    /// 누르고 있는 동안 되감기
+    Rewind,
 }
 
 impl Action {
-    pub const ALL: [Action; 11] = [
+    pub const ALL: [Action; 12] = [
         Action::Up,
         Action::Down,
         Action::Left,
@@ -37,6 +39,7 @@ impl Action {
         Action::Start,
         Action::Select,
         Action::FastForward,
+        Action::Rewind,
         Action::Pause,
         Action::Mute,
     ];
@@ -52,7 +55,7 @@ impl Action {
             Action::B => Button::B,
             Action::Select => Button::Select,
             Action::Start => Button::Start,
-            Action::FastForward | Action::Pause | Action::Mute => return None,
+            Action::FastForward | Action::Pause | Action::Mute | Action::Rewind => return None,
         })
     }
 
@@ -69,6 +72,7 @@ impl Action {
             Action::FastForward => "배속 (누르는 동안)",
             Action::Pause => "일시정지",
             Action::Mute => "음소거",
+            Action::Rewind => "되감기 (누르는 동안)",
         }
     }
 }
@@ -87,6 +91,7 @@ pub struct Bindings {
     pub fast_forward: String,
     pub pause: String,
     pub mute: String,
+    pub rewind: String,
 }
 
 impl Bindings {
@@ -104,6 +109,7 @@ impl Bindings {
             "Tab",
             "Escape",
             "M",
+            "R",
         ])
     }
 
@@ -121,11 +127,12 @@ impl Bindings {
             "RightTrigger",
             "",
             "",
+            "LeftTrigger",
         ])
     }
 
-    /// 순서: 오른쪽, 왼쪽, 위, 아래, A, B, Select, Start, 배속, 일시정지, 음소거.
-    pub fn from_names(names: [&str; 11]) -> Self {
+    /// 순서: 오른쪽, 왼쪽, 위, 아래, A, B, Select, Start, 배속, 일시정지, 음소거, 되감기.
+    pub fn from_names(names: [&str; 12]) -> Self {
         let [
             right,
             left,
@@ -138,6 +145,7 @@ impl Bindings {
             fast_forward,
             pause,
             mute,
+            rewind,
         ] = names.map(str::to_string);
         Self {
             right,
@@ -151,6 +159,7 @@ impl Bindings {
             fast_forward,
             pause,
             mute,
+            rewind,
         }
     }
 
@@ -167,6 +176,7 @@ impl Bindings {
             Action::FastForward => &self.fast_forward,
             Action::Pause => &self.pause,
             Action::Mute => &self.mute,
+            Action::Rewind => &self.rewind,
         }
     }
 
@@ -183,6 +193,7 @@ impl Bindings {
             Action::FastForward => &mut self.fast_forward,
             Action::Pause => &mut self.pause,
             Action::Mute => &mut self.mute,
+            Action::Rewind => &mut self.rewind,
         }
     }
 
@@ -273,10 +284,33 @@ mod partial {
         pause: Option<String>,
         #[serde(deserialize_with = "lenient")]
         mute: Option<String>,
+        #[serde(deserialize_with = "lenient")]
+        rewind: Option<String>,
     }
 
     impl PartialBindings {
+        /// 빠진 항목은 `base`의 값으로 채운다. 다만 그 기본 키를 다른 기능에 이미 지정했으면 비워 둔다
+        /// (새 버전에서 생긴 기능의 기본 키가 사용자가 지정한 키와 겹치지 않게).
         pub fn fill(self, mut base: Bindings) -> Bindings {
+            let given: Vec<String> = [
+                &self.right,
+                &self.left,
+                &self.up,
+                &self.down,
+                &self.a,
+                &self.b,
+                &self.select,
+                &self.start,
+                &self.fast_forward,
+                &self.pause,
+                &self.mute,
+                &self.rewind,
+            ]
+            .into_iter()
+            .flatten()
+            .filter(|name| !name.is_empty())
+            .cloned()
+            .collect();
             let fields = [
                 (self.right, &mut base.right),
                 (self.left, &mut base.left),
@@ -289,10 +323,13 @@ mod partial {
                 (self.fast_forward, &mut base.fast_forward),
                 (self.pause, &mut base.pause),
                 (self.mute, &mut base.mute),
+                (self.rewind, &mut base.rewind),
             ];
             for (value, slot) in fields {
-                if let Some(value) = value {
-                    *slot = value;
+                match value {
+                    Some(value) => *slot = value,
+                    None if given.contains(slot) => slot.clear(),
+                    None => {}
                 }
             }
             base
@@ -364,6 +401,17 @@ mod tests {
         assert_eq!(k.get(Action::FastForward), "Tab");
         assert_eq!(k.get(Action::Pause), "Escape");
         assert_eq!(k.get(Action::Mute), "M");
+        assert_eq!(k.get(Action::Rewind), "R");
+    }
+
+    #[test]
+    fn new_action_default_does_not_steal_a_used_key() {
+        // 되감기가 없던 설정에서 A를 R로 바꿔 두었으면 되감기는 비워 둔다.
+        let c: InputConfig =
+            serde_json::from_str(r#"{"keyboard":{"a":"R"},"gamepad":{"b":"South"}}"#).unwrap();
+        assert_eq!(c.keyboard.get(Action::Rewind), "");
+        assert_eq!(c.keyboard.actions_for("R").collect::<Vec<_>>(), [Action::A]);
+        assert_eq!(c.gamepad.get(Action::Rewind), "LeftTrigger");
     }
 
     #[test]

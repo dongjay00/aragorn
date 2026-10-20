@@ -2,6 +2,7 @@
 
 use crate::apu::{self, Apu};
 use crate::cartridge::Cartridge;
+use crate::cheat::Cheats;
 use crate::cpu::{CpuBus, IE_ADDR, IF_ADDR};
 use crate::joypad::{self, Button, Joypad};
 use crate::model::Model;
@@ -82,6 +83,9 @@ pub struct Bus {
     cycles: u64,
     /// 시작 후 진행한 dot(PPU 클록) 수. 2배속에서는 M-사이클당 2다.
     dots: u64,
+    /// 켜 둔 치트. 스테이트에 넣지 않는다.
+    #[serde(skip)]
+    cheats: Cheats,
 }
 
 impl Bus {
@@ -113,6 +117,7 @@ impl Bus {
             opri: 0,
             cycles: 0,
             dots: 0,
+            cheats: Cheats::default(),
         }
     }
 
@@ -138,6 +143,7 @@ impl Bus {
         }
         self.cart.adopt_rom(&host.cart)?;
         self.apu.adopt_host(&host.apu);
+        self.cheats = host.cheats.clone();
         self.sanitize();
         Ok(())
     }
@@ -195,9 +201,31 @@ impl Bus {
         self.ppu.take_frame_ready()
     }
 
+    pub(crate) fn set_cheats(&mut self, cheats: Cheats) {
+        self.cheats = cheats;
+    }
+
+    /// 게임샤크 코드를 메모리에 쓴다. 프레임마다(VBlank 진입 때) 부른다.
+    pub(crate) fn apply_cheat_writes(&mut self) {
+        for i in 0..self.cheats.writes().len() {
+            let (bank, addr, value) = self.cheats.writes()[i];
+            match (bank, addr) {
+                // CGB WRAM 뱅크를 고른 코드는 지금 보이는 뱅크와 상관없이 그 뱅크에 쓴다.
+                (0x80..=0x87, 0xD000..=0xDFFF) => {
+                    let bank = usize::from(bank & 0x07).max(1);
+                    self.wram[bank * 0x1000 + usize::from(addr & 0x0FFF)] = value;
+                }
+                _ => self.write(addr, value),
+            }
+        }
+    }
+
     /// 부수 효과 없는 읽기 (디버거도 쓴다).
     pub fn peek(&self, addr: u16) -> u8 {
         match addr {
+            0x0000..=0x7FFF if self.cheats.has_genie() => {
+                self.cheats.patch_rom(addr, self.cart.read_rom(addr))
+            }
             0x0000..=0x7FFF => self.cart.read_rom(addr),
             0x8000..=0x9FFF => self.ppu.read_vram(addr),
             0xA000..=0xBFFF => self.cart.read_ram(addr),

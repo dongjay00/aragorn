@@ -2,6 +2,7 @@
 
 use crate::bus::Bus;
 use crate::cartridge::{CartError, Cartridge, Header};
+use crate::cheat::{Cheat, Cheats};
 use crate::cpu::{Cpu, IllegalOpcode, Registers, disasm};
 use crate::debugger::Debugger;
 use crate::joypad::Button;
@@ -77,7 +78,11 @@ impl GameBoy {
             }
             first = false;
             self.traced_step();
-            if self.bus.take_frame_ready() || self.bus.dots() >= deadline {
+            if self.bus.take_frame_ready() {
+                self.bus.apply_cheat_writes();
+                return;
+            }
+            if self.bus.dots() >= deadline {
                 return;
             }
         }
@@ -97,6 +102,11 @@ impl GameBoy {
         }
         // 단계 실행 중에 지난 VBlank 표시는 버린다. 남겨 두면 다음 `run_frame`이 바로 끝난다.
         self.bus.take_frame_ready();
+    }
+
+    /// 켤 치트를 바꾼다. 빈 목록이면 모두 끈다. 스테이트를 불러와도 유지한다.
+    pub fn set_cheats(&mut self, cheats: &[Cheat]) {
+        self.bus.set_cheats(Cheats::new(cheats));
     }
 
     /// PC 브레이크포인트를 `pcs`로 바꾼다. 빈 목록이면 모두 지운다.
@@ -305,6 +315,35 @@ mod tests {
         let mut gb = gb_with_program(&[0x3C]); // INC A
         gb.step();
         assert_eq!(gb.debug().registers().pc, 0x0101);
+    }
+
+    #[test]
+    fn game_genie_changes_what_the_cpu_reads() {
+        // LD A,(0x0200) ; JR -2. ROM의 0x0200은 0이다.
+        let mut gb = gb_with_program(&[0xFA, 0x00, 0x02, 0x18, 0xFE]);
+        // 0x0200을 0x42로: AB=42, 주소 (F^F)CDE = 0 2 0 0 → C=2, D=0, E=0, F=F
+        gb.set_cheats(&[Cheat::parse("422-00F").unwrap()]);
+        gb.step();
+        assert_eq!(gb.debug().registers().a, 0x42);
+        gb.set_cheats(&[]);
+        assert_eq!(gb.debug().peek(0x0200), 0x00, "끄면 원래 값");
+    }
+
+    #[test]
+    fn game_shark_writes_every_frame_and_survives_state_loading() {
+        let mut gb = gb_with_program(&[0x18, 0xFE]);
+        let state = gb.save_state(0);
+        gb.set_cheats(&[Cheat::parse("0163 38CD").unwrap()]);
+        gb.run_frame();
+        assert_eq!(gb.debug().peek(0xCD38), 0x63);
+        gb.load_state(&state, 0).unwrap();
+        assert_eq!(gb.debug().peek(0xCD38), 0x00, "스테이트의 메모리");
+        gb.run_frame();
+        assert_eq!(
+            gb.debug().peek(0xCD38),
+            0x63,
+            "불러온 뒤에도 치트는 켜져 있다"
+        );
     }
 
     #[test]

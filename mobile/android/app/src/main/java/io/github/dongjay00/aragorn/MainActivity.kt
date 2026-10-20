@@ -22,6 +22,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.window.DialogProperties
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.github.dongjay00.aragorn.core.InputDevice
+import io.github.dongjay00.aragorn.ui.CheatsScreen
 import io.github.dongjay00.aragorn.ui.DebuggerScreen
 import io.github.dongjay00.aragorn.ui.GameScreen
 import io.github.dongjay00.aragorn.ui.SettingsScreen
@@ -116,6 +117,7 @@ private fun AragornApp(viewModel: GameViewModel, onOpenRom: () -> Unit, onOpenUr
         Page.GAME -> GameScreen(viewModel, onOpenRom)
         Page.SETTINGS -> SettingsScreen(viewModel, onBack = { viewModel.showPage(Page.GAME) })
         Page.DEBUGGER -> DebuggerScreen(viewModel, onBack = { viewModel.showPage(Page.GAME) })
+        Page.CHEATS -> CheatsScreen(viewModel, onBack = { viewModel.showPage(Page.GAME) })
     }
     UpdateDialog(update, viewModel, onDownload = { onOpenUrl(viewModel.releasePage) })
 }

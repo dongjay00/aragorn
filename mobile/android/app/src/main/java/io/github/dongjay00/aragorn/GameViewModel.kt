@@ -6,16 +6,20 @@ import android.os.SystemClock
 import android.provider.OpenableColumns
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import io.github.dongjay00.aragorn.core.CheatInfo
 import io.github.dongjay00.aragorn.core.Emulator
 import io.github.dongjay00.aragorn.core.EmulatorException
 import io.github.dongjay00.aragorn.core.FastSpeed
 import io.github.dongjay00.aragorn.core.GbButton
 import io.github.dongjay00.aragorn.core.InputAction
 import io.github.dongjay00.aragorn.core.InputDevice
+import io.github.dongjay00.aragorn.core.PadLayout
+import io.github.dongjay00.aragorn.core.RecentRom
 import io.github.dongjay00.aragorn.core.Settings
 import io.github.dongjay00.aragorn.core.SlotSummary
 import io.github.dongjay00.aragorn.core.Speed
 import io.github.dongjay00.aragorn.core.UpdateCheck
+import io.github.dongjay00.aragorn.core.VideoSettings
 import io.github.dongjay00.aragorn.core.actionButton
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -28,7 +32,7 @@ import kotlinx.coroutines.withContext
 import java.io.File
 
 /** 앱 화면. 뒤로 가기는 게임 화면으로 돌아온다. */
-enum class Page { GAME, SETTINGS, DEBUGGER }
+enum class Page { GAME, SETTINGS, DEBUGGER, CHEATS }
 
 /** 업데이트 확인 상태. */
 sealed interface UpdateState {
@@ -66,6 +70,25 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     private val _haptics = MutableStateFlow(settings.haptics())
     /** 가상 패드를 누를 때 햅틱을 낼지. */
     val haptics: StateFlow<Boolean> = _haptics.asStateFlow()
+
+    private val _video = MutableStateFlow(settings.video())
+    /** 화면 필터 (팔레트, 색 보정, LCD 격자). */
+    val video: StateFlow<VideoSettings> = _video.asStateFlow()
+
+    private val _rewindEnabled = MutableStateFlow(settings.rewindEnabled())
+    val rewindEnabled: StateFlow<Boolean> = _rewindEnabled.asStateFlow()
+
+    private val _padLayout = MutableStateFlow(settings.padLayout())
+    /** 가상 패드 크기·투명도·높이. */
+    val padLayout: StateFlow<PadLayout> = _padLayout.asStateFlow()
+
+    private val _recent = MutableStateFlow(settings.recentGames())
+    /** 최근에 연 게임, 최근 것부터. */
+    val recent: StateFlow<List<RecentRom>> = _recent.asStateFlow()
+
+    private val _cheats = MutableStateFlow<List<CheatInfo>>(emptyList())
+    /** 지금 게임의 치트 목록. */
+    val cheats: StateFlow<List<CheatInfo>> = _cheats.asStateFlow()
 
     private val _paused = MutableStateFlow(false)
     /** 사용자가 일시정지했는지. */
@@ -109,6 +132,9 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     /** 터치 배속 버튼과 배속 키. 둘 중 하나라도 누르면 배속이다. */
     private var fastTouch = false
     private var fastKey = false
+    /** 되감기도 터치와 키를 합친다. */
+    private var rewindTouch = false
+    private var rewindKey = false
 
     /** 마지막으로 자동 확인한 시각 (elapsedRealtime). */
     private var lastAutoCheck: Long? = null
@@ -125,29 +151,58 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
 
     // ---- ROM ----
 
-    /** 문서 선택기로 고른 ROM을 연다. 세이브는 앱 전용 폴더의 `saves/`에 둔다. */
+    /**
+     * 문서 선택기로 고른 ROM을 연다. 최근 게임으로 다시 열 수 있게 앱 전용 폴더의 `roms/`에 복사해 두고,
+     * 세이브는 `saves/`에 둔다.
+     */
     fun openRom(uri: Uri) {
+        startGame {
+            val app = getApplication<Application>()
+            val rom = app.contentResolver.openInputStream(uri)?.use { it.readBytes() }
+                ?: error("ROM 파일을 열 수 없습니다")
+            val file = File(app.filesDir, "roms/${displayName(uri)}")
+            file.parentFile?.mkdirs()
+            file.writeBytes(rom)
+            rom to file
+        }
+    }
+
+    /** 최근 게임을 다시 연다. 복사해 둔 ROM이 없으면 목록에서 뺀다. */
+    fun openRecent(path: String) {
+        val file = File(path)
+        if (!file.isFile) {
+            saveSetting { settings.removeRecent(path) }
+            _recent.value = settings.recentGames()
+            _notice.value = "ROM 파일이 없어 최근 목록에서 뺐습니다"
+            return
+        }
+        startGame { file.readBytes() to file }
+    }
+
+    /** `load`가 읽은 ROM으로 게임을 시작하고 최근 목록 맨 앞에 넣는다. */
+    private fun startGame(load: () -> Pair<ByteArray, File>) {
         viewModelScope.launch {
             val opened = withContext(Dispatchers.IO) {
                 runCatching {
-                    val app = getApplication<Application>()
-                    val rom = app.contentResolver.openInputStream(uri)?.use { it.readBytes() }
-                        ?: error("ROM 파일을 열 수 없습니다")
-                    val name = displayName(uri)
-                    val savePath = File(app.filesDir, "saves/$name")
+                    val (rom, file) = load()
+                    val savePath = File(getApplication<Application>().filesDir, "saves/${file.name}")
                     // 같은 ROM을 다시 열면 새 세션이 세이브를 읽기 전에 지금 진행을 저장해 둔다.
                     _emulator.value?.flush()
-                    Emulator(rom, savePath.path) to name
+                    Triple(Emulator(rom, savePath.path), file, file.name)
                 }
             }
             opened
-                .onSuccess { (emulator, name) ->
+                .onSuccess { (emulator, file, name) ->
                     _emulator.value?.close()
                     configure(emulator)
                     _emulator.value = emulator
                     watchSaveFiles(emulator, name)
                     // 헤더에 제목이 없는 ROM(테스트 ROM 등)은 파일 이름을 보인다.
-                    _notice.value = "${emulator.title().ifBlank { name }} 실행 중"
+                    val title = emulator.title().ifBlank { name }
+                    _notice.value = "$title 실행 중"
+                    saveSetting { settings.addRecent(file.path, title) }
+                    _recent.value = settings.recentGames()
+                    _cheats.value = emulator.cheats()
                     refreshSlots()
                 }
                 .onFailure { _notice.value = it.userMessage ?: "ROM을 열 수 없습니다" }
@@ -165,6 +220,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             viewModelScope.launch {
                 if (_emulator.value === emulator) {
                     _emulator.value = null
+                    _cheats.value = emptyList()
                     emulator.close()
                     _notice.value = "파일 앱에서 세이브를 바꿔 게임을 닫았습니다. ROM을 다시 열어 주세요"
                 }
@@ -177,6 +233,9 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         emulator.setSpeed(_baseSpeed.value, _fastSpeed.value)
         emulator.setMuted(_muted.value)
         emulator.setFastHeld(fastTouch || fastKey)
+        emulator.setRewindHeld(rewindTouch || rewindKey)
+        emulator.setRewindEnabled(_rewindEnabled.value)
+        emulator.setVideo(_video.value)
         emulator.setBreakpoints(_breakpoints.value)
         _channelMuted.value.forEachIndexed { channel, muted ->
             emulator.setChannelMuted(channel.toUByte(), muted)
@@ -230,6 +289,12 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         _emulator.value?.setFastHeld(fastTouch || fastKey)
     }
 
+    /** 화면의 되감기 버튼 (누르는 동안). */
+    fun setRewindTouch(held: Boolean) {
+        rewindTouch = held
+        _emulator.value?.setRewindHeld(rewindTouch || rewindKey)
+    }
+
     /**
      * 키보드·게임패드 입력. 키 설정 중이면 그 칸에 지정하고, 아니면 지정된 기능을 실행한다.
      * 처리했으면 `true`. `repeat`는 키를 누르고 있어 반복된 입력이다.
@@ -248,6 +313,10 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
                 action == InputAction.FAST_FORWARD -> {
                     fastKey = pressed
                     _emulator.value?.setFastHeld(fastTouch || fastKey)
+                }
+                action == InputAction.REWIND -> {
+                    rewindKey = pressed
+                    _emulator.value?.setRewindHeld(rewindTouch || rewindKey)
                 }
                 !pressed || repeat -> {}
                 action == InputAction.PAUSE -> togglePause()
@@ -283,6 +352,60 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     fun setHaptics(on: Boolean) {
         _haptics.value = on
         saveSetting { settings.setHaptics(on) }
+    }
+
+    fun setVideo(video: VideoSettings) {
+        _video.value = video
+        _emulator.value?.setVideo(video)
+        saveSetting { settings.setVideo(video) }
+    }
+
+    fun setRewindEnabled(on: Boolean) {
+        _rewindEnabled.value = on
+        _emulator.value?.setRewindEnabled(on)
+        saveSetting { settings.setRewindEnabled(on) }
+    }
+
+    /** 슬라이더를 움직이는 동안 자주 불린다. 파일에는 [savePadLayout]에서 쓴다. */
+    fun setPadLayout(layout: PadLayout) {
+        _padLayout.value = layout
+    }
+
+    fun savePadLayout() {
+        saveSetting { settings.setPadLayout(_padLayout.value) }
+        _padLayout.value = settings.padLayout()
+    }
+
+    fun resetPadLayout() {
+        _padLayout.value = PadLayout(scale = 1f, opacity = 1f, lift = 0f)
+        savePadLayout()
+    }
+
+    // ---- 치트 ----
+
+    /** 더했으면 `true`. 코드가 틀리면 안내 문구로 이유를 보인다. */
+    fun addCheat(code: String, name: String): Boolean =
+        cheatChange { it.addCheat(code, name) }.also { if (it) _notice.value = "치트를 켰습니다" }
+
+    fun setCheatEnabled(index: Int, enabled: Boolean) {
+        cheatChange { it.setCheatEnabled(index.toUInt(), enabled) }
+    }
+
+    fun removeCheat(index: Int) {
+        cheatChange { it.removeCheat(index.toUInt()) }
+    }
+
+    private fun cheatChange(change: (Emulator) -> Unit): Boolean {
+        val emulator = _emulator.value ?: return false
+        val ok = try {
+            change(emulator)
+            true
+        } catch (e: EmulatorException) {
+            _notice.value = e.userMessage
+            false
+        }
+        _cheats.value = emulator.cheats()
+        return ok
     }
 
     fun setBaseSpeed(speed: Speed) {

@@ -1,6 +1,7 @@
 package io.github.dongjay00.aragorn.ui
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.waitForUpOrCancellation
@@ -36,6 +37,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
@@ -52,6 +54,8 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.github.dongjay00.aragorn.GameViewModel
 import io.github.dongjay00.aragorn.Page
 import io.github.dongjay00.aragorn.core.GbButton
+import io.github.dongjay00.aragorn.core.PadLayout
+import io.github.dongjay00.aragorn.core.RecentRom
 import kotlin.math.abs
 
 private val Body = Color(0xFF1E1E24)
@@ -60,6 +64,17 @@ private val KeyPressed = Color(0xFF5A5A68)
 private val ActionColor = Color(0xFF8B2252)
 /** 가상 패드를 누를 때 햅틱을 낼지 (설정의 "버튼 햅틱"). */
 private val LocalPadHaptics = compositionLocalOf { true }
+/** 가상 패드 버튼 크기 배율 (설정의 "가상 패드"). */
+private val LocalPadScale = compositionLocalOf { 1f }
+/** 패드를 아래에서 띄우는 최대 높이. 설정의 높이(0–1)에 곱한다. */
+private val MAX_LIFT = 160.dp
+/** 배율 1에서 방향키와 A/B를 나란히 놓는 데 필요한 폭 (세로 화면). */
+private val PORTRAIT_PAD_WIDTH = 320.dp
+/** 배율 1에서 가로 화면 한쪽 칸에 필요한 폭과 높이 (방향키와 SELECT, 또는 A/B와 START). */
+private val LANDSCAPE_SIDE_WIDTH = 170.dp
+private val LANDSCAPE_SIDE_HEIGHT = 230.dp
+/** 툴바 ROM 메뉴에 보일 최근 게임 수. */
+private const val MENU_RECENT = 5
 
 private val PillShape = RoundedCornerShape(50)
 private val KeyShape = RoundedCornerShape(8.dp)
@@ -74,6 +89,10 @@ fun GameScreen(viewModel: GameViewModel, onOpenRom: () -> Unit) {
     val muted by viewModel.muted.collectAsStateWithLifecycle()
     val speedText by viewModel.speedText.collectAsStateWithLifecycle()
     val haptics by viewModel.haptics.collectAsStateWithLifecycle()
+    val pad by viewModel.padLayout.collectAsStateWithLifecycle()
+    val video by viewModel.video.collectAsStateWithLifecycle()
+    val recent by viewModel.recent.collectAsStateWithLifecycle()
+    val rewindEnabled by viewModel.rewindEnabled.collectAsStateWithLifecycle()
     var slotsOpen by remember { mutableStateOf(false) }
 
     val toolbar = @Composable {
@@ -81,7 +100,9 @@ fun GameScreen(viewModel: GameViewModel, onOpenRom: () -> Unit) {
             hasGame = emulator != null,
             paused = paused,
             muted = muted,
+            recent = recent.take(MENU_RECENT),
             onOpenRom = onOpenRom,
+            onOpenRecent = viewModel::openRecent,
             onSlots = {
                 viewModel.refreshSlots()
                 slotsOpen = true
@@ -90,20 +111,16 @@ fun GameScreen(viewModel: GameViewModel, onOpenRom: () -> Unit) {
             onMute = { viewModel.setMuted(!muted) },
             onSettings = { viewModel.showPage(Page.SETTINGS) },
             onDebugger = { viewModel.showPage(Page.DEBUGGER) },
+            onCheats = { viewModel.showPage(Page.CHEATS) },
             onCheckUpdate = { viewModel.checkForUpdate(manual = true) },
         )
     }
     val screen = @Composable { modifier: Modifier ->
         val current = emulator
         if (current != null) {
-            LcdScreen(current, modifier, onFrame = viewModel::poll)
+            LcdScreen(current, modifier, grid = video.lcdGrid, onFrame = viewModel::poll)
         } else {
-            Box(
-                modifier.aspectRatio(160f / 144f).background(Color.Black),
-                contentAlignment = Alignment.Center,
-            ) {
-                Text("ROM을 열어 주세요", color = Color.Gray)
-            }
+            EmptyScreen(modifier, recent, onOpenRecent = viewModel::openRecent)
         }
     }
     val status = @Composable {
@@ -120,16 +137,32 @@ fun GameScreen(viewModel: GameViewModel, onOpenRom: () -> Unit) {
         }
     }
 
-    CompositionLocalProvider(LocalPadHaptics provides haptics) {
-        BoxWithConstraints(Modifier.fillMaxSize().background(Body).safeDrawingPadding()) {
-            if (maxWidth > maxHeight) {
-                // 가로: 왼쪽 방향키, 가운데 화면, 오른쪽 A/B. 화면 폭은 남는 높이(툴바와 상태 줄을 뺀 것)로 정한다.
-                val lcdWidth = (maxHeight - LANDSCAPE_CHROME) * (160f / 144f)
+    val lift = MAX_LIFT * pad.lift
+    val padAlpha = Modifier.alpha(pad.opacity)
+    val actions = @Composable { ActionButtons(viewModel, rewindEnabled) }
+    BoxWithConstraints(Modifier.fillMaxSize().background(Body).safeDrawingPadding()) {
+        val landscape = maxWidth > maxHeight
+        // 가로: 왼쪽 방향키, 가운데 화면, 오른쪽 A/B. 화면 폭은 남는 높이(툴바와 상태 줄을 뺀 것)로 정한다.
+        val lcdWidth = (maxHeight - LANDSCAPE_CHROME) * (160f / 144f)
+        // 설정한 크기가 화면 폭에 들어가지 않으면 들어가는 만큼만 키운다.
+        val fit = if (landscape) {
+            minOf(
+                (maxWidth - 32.dp - lcdWidth) / 2 / LANDSCAPE_SIDE_WIDTH,
+                (maxHeight - LANDSCAPE_CHROME / 2 - lift) / LANDSCAPE_SIDE_HEIGHT,
+            )
+        } else {
+            (maxWidth - 32.dp) / PORTRAIT_PAD_WIDTH
+        }
+        CompositionLocalProvider(
+            LocalPadHaptics provides haptics,
+            LocalPadScale provides minOf(pad.scale, maxOf(fit, 0.5f)),
+        ) {
+            if (landscape) {
                 Column(Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
                     toolbar()
                     Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
                         Column(
-                            Modifier.weight(1f).fillMaxHeight(),
+                            Modifier.weight(1f).fillMaxHeight().padding(bottom = lift).then(padAlpha),
                             verticalArrangement = Arrangement.SpaceEvenly,
                             horizontalAlignment = Alignment.CenterHorizontally,
                         ) {
@@ -141,11 +174,11 @@ fun GameScreen(viewModel: GameViewModel, onOpenRom: () -> Unit) {
                             status()
                         }
                         Column(
-                            Modifier.weight(1f).fillMaxHeight(),
+                            Modifier.weight(1f).fillMaxHeight().padding(bottom = lift).then(padAlpha),
                             verticalArrangement = Arrangement.SpaceEvenly,
                             horizontalAlignment = Alignment.CenterHorizontally,
                         ) {
-                            ActionButtons(viewModel)
+                            actions()
                             PadButton("START", GbButton.START, viewModel::setButton, PillShape, 72.dp, 28.dp)
                         }
                     }
@@ -160,15 +193,15 @@ fun GameScreen(viewModel: GameViewModel, onOpenRom: () -> Unit) {
                     status()
                     Spacer(Modifier.weight(1f))
                     Row(
-                        Modifier.fillMaxWidth(),
+                        Modifier.fillMaxWidth().then(padAlpha),
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         DPad(viewModel::setButton)
-                        ActionButtons(viewModel)
+                        actions()
                     }
                     Spacer(Modifier.height(24.dp))
-                    Row(Modifier.padding(bottom = 24.dp)) {
+                    Row(Modifier.padding(bottom = 24.dp + lift).then(padAlpha)) {
                         PadButton("SELECT", GbButton.SELECT, viewModel::setButton, PillShape, 72.dp, 28.dp)
                         Spacer(Modifier.width(16.dp))
                         PadButton("START", GbButton.START, viewModel::setButton, PillShape, 72.dp, 28.dp)
@@ -184,22 +217,77 @@ fun GameScreen(viewModel: GameViewModel, onOpenRom: () -> Unit) {
     }
 }
 
+/** 게임이 없을 때 화면 자리. 최근 게임을 누르면 바로 연다. */
+@Composable
+private fun EmptyScreen(modifier: Modifier, recent: List<RecentRom>, onOpenRecent: (String) -> Unit) {
+    Column(
+        modifier.aspectRatio(160f / 144f).background(Color.Black).padding(12.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center,
+    ) {
+        if (recent.isEmpty()) {
+            Text("ROM을 열어 주세요", color = Color.Gray)
+            return@Column
+        }
+        Text("최근 게임", color = Color.Gray, style = MaterialTheme.typography.labelMedium)
+        Spacer(Modifier.height(4.dp))
+        for (game in recent.take(MENU_RECENT)) {
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .clickable { onOpenRecent(game.path) }
+                    .padding(vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    game.title,
+                    color = Color.White,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f),
+                )
+                Text(game.ago, color = Color.Gray, fontSize = 12.sp)
+            }
+        }
+    }
+}
+
 @Composable
 private fun Toolbar(
     hasGame: Boolean,
     paused: Boolean,
     muted: Boolean,
+    recent: List<RecentRom>,
     onOpenRom: () -> Unit,
+    onOpenRecent: (String) -> Unit,
     onSlots: () -> Unit,
     onPause: () -> Unit,
     onMute: () -> Unit,
     onSettings: () -> Unit,
     onDebugger: () -> Unit,
+    onCheats: () -> Unit,
     onCheckUpdate: () -> Unit,
 ) {
     var menuOpen by remember { mutableStateOf(false) }
+    var romMenuOpen by remember { mutableStateOf(false) }
     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-        TextButton(onClick = onOpenRom) { Text("ROM") }
+        Box {
+            // 최근 게임이 없으면 메뉴 없이 바로 파일을 고른다.
+            TextButton(onClick = { if (recent.isEmpty()) onOpenRom() else romMenuOpen = true }) { Text("ROM") }
+            DropdownMenu(expanded = romMenuOpen, onDismissRequest = { romMenuOpen = false }) {
+                DropdownMenuItem(
+                    text = { Text("파일에서 열기…") },
+                    onClick = { romMenuOpen = false; onOpenRom() },
+                )
+                for (game in recent) {
+                    DropdownMenuItem(
+                        text = { Text(game.title, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                        trailingIcon = { Text(game.ago, fontSize = 12.sp, color = Color.Gray) },
+                        onClick = { romMenuOpen = false; onOpenRecent(game.path) },
+                    )
+                }
+            }
+        }
         TextButton(onClick = onSlots, enabled = hasGame) { Text("스테이트") }
         TextButton(onClick = onPause, enabled = hasGame) { Text(if (paused) "계속" else "일시정지") }
         TextButton(onClick = onMute) { Text(if (muted) "소리 켜기" else "음소거") }
@@ -208,6 +296,11 @@ private fun Toolbar(
             TextButton(onClick = { menuOpen = true }) { Text("⋮", fontSize = 18.sp) }
             DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
                 DropdownMenuItem(text = { Text("설정") }, onClick = { menuOpen = false; onSettings() })
+                DropdownMenuItem(
+                    text = { Text("치트") },
+                    enabled = hasGame,
+                    onClick = { menuOpen = false; onCheats() },
+                )
                 DropdownMenuItem(
                     text = { Text("디버거") },
                     enabled = hasGame,
@@ -222,17 +315,26 @@ private fun Toolbar(
     }
 }
 
-/** A/B와 배속 버튼. 배속은 누르는 동안만 빨라진다 (데스크톱 배속 키와 같다). */
+/**
+ * A/B와 배속·되감기 버튼. 배속과 되감기는 누르는 동안만 동작한다 (데스크톱 키와 같다).
+ * 되감기를 끄면 되감기 버튼은 숨긴다.
+ */
 @Composable
-private fun ActionButtons(viewModel: GameViewModel) {
+private fun ActionButtons(viewModel: GameViewModel, rewind: Boolean) {
+    val scale = LocalPadScale.current
     Column(horizontalAlignment = Alignment.CenterHorizontally) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            PadButton("B", GbButton.B, viewModel::setButton, modifier = Modifier.padding(top = 32.dp))
-            Spacer(Modifier.width(16.dp))
-            PadButton("A", GbButton.A, viewModel::setButton, modifier = Modifier.padding(bottom = 32.dp))
+            PadButton("B", GbButton.B, viewModel::setButton, modifier = Modifier.padding(top = 32.dp * scale))
+            Spacer(Modifier.width(16.dp * scale))
+            PadButton("A", GbButton.A, viewModel::setButton, modifier = Modifier.padding(bottom = 32.dp * scale))
         }
         Spacer(Modifier.height(12.dp))
-        HoldButton("▶▶ 배속", onHold = viewModel::setFastTouch, shape = PillShape, width = 88.dp, height = 28.dp)
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            if (rewind) {
+                HoldButton("◀◀ 되감기", onHold = viewModel::setRewindTouch, shape = PillShape, width = 80.dp, height = 28.dp)
+            }
+            HoldButton("▶▶ 배속", onHold = viewModel::setFastTouch, shape = PillShape, width = 80.dp, height = 28.dp)
+        }
     }
 }
 
@@ -242,7 +344,7 @@ private fun ActionButtons(viewModel: GameViewModel) {
  */
 @Composable
 private fun DPad(onButton: (GbButton, Boolean) -> Unit) {
-    val key = 52.dp
+    val key = 52.dp * LocalPadScale.current
     val haptics = LocalHapticFeedback.current
     val hapticsOn by rememberUpdatedState(LocalPadHaptics.current)
     var pressed by remember { mutableStateOf(emptySet<GbButton>()) }
@@ -321,7 +423,8 @@ private fun PadButton(
     modifier: Modifier = Modifier,
 ) {
     val color = if (button == GbButton.A || button == GbButton.B) ActionColor else KeyColor
-    HoldButton(label, { onButton(button, it) }, shape, width, height, modifier, color)
+    val scale = LocalPadScale.current
+    HoldButton(label, { onButton(button, it) }, shape, width * scale, height * scale, modifier, color)
 }
 
 @Composable

@@ -3,6 +3,7 @@ package io.github.dongjay00.aragorn.ui
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -17,11 +18,13 @@ import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.ui.Alignment
@@ -36,11 +39,14 @@ import io.github.dongjay00.aragorn.core.InputDevice
 import io.github.dongjay00.aragorn.core.Speed
 import io.github.dongjay00.aragorn.core.actionLabel
 import io.github.dongjay00.aragorn.core.allActions
+import io.github.dongjay00.aragorn.core.allPalettes
+import io.github.dongjay00.aragorn.core.paletteLabel
+import kotlin.math.roundToInt
 import io.github.dongjay00.aragorn.core.appVersion
 import io.github.dongjay00.aragorn.core.fastSpeedLabel
 import io.github.dongjay00.aragorn.core.speedLabel
 
-/** 데스크톱 설정 창과 같은 항목: 키·게임패드 매핑, 기본 속도, 배속 속도, 음소거, 업데이트. */
+/** 데스크톱 설정 창과 같은 항목(키·게임패드 매핑, 속도, 화면, 되감기, 음소거, 업데이트)과 가상 패드 모양. */
 @Composable
 fun SettingsScreen(viewModel: GameViewModel, onBack: () -> Unit) {
     val capturing by viewModel.capturing.collectAsStateWithLifecycle()
@@ -49,6 +55,9 @@ fun SettingsScreen(viewModel: GameViewModel, onBack: () -> Unit) {
     val fastSpeed by viewModel.fastSpeed.collectAsStateWithLifecycle()
     val muted by viewModel.muted.collectAsStateWithLifecycle()
     val haptics by viewModel.haptics.collectAsStateWithLifecycle()
+    val video by viewModel.video.collectAsStateWithLifecycle()
+    val rewindEnabled by viewModel.rewindEnabled.collectAsStateWithLifecycle()
+    val pad by viewModel.padLayout.collectAsStateWithLifecycle()
     val update by viewModel.update.collectAsStateWithLifecycle()
     val notice by viewModel.notice.collectAsStateWithLifecycle()
 
@@ -125,6 +134,66 @@ fun SettingsScreen(viewModel: GameViewModel, onBack: () -> Unit) {
                     style = MaterialTheme.typography.bodySmall,
                 )
 
+                Section("되감기")
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text("되감기")
+                        Text(
+                            "되감기 버튼·키를 누르는 동안 최근 약 20초를 거꾸로 돌립니다. 끄면 메모리를 아낍니다.",
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    }
+                    Switch(checked = rewindEnabled, onCheckedChange = viewModel::setRewindEnabled)
+                }
+
+                Section("화면")
+                Text("흑백 게임 색")
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    for (palette in allPalettes()) {
+                        FilterChip(
+                            selected = palette == video.palette,
+                            onClick = { viewModel.setVideo(video.copy(palette = palette)) },
+                            label = { Text(paletteLabel(palette), maxLines = 1) },
+                        )
+                    }
+                }
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text("컬러 게임 색 보정")
+                        Text("게임보이 컬러 화면처럼 색을 덜 진하게 합니다.", style = MaterialTheme.typography.bodySmall)
+                    }
+                    Switch(
+                        checked = video.colorCorrection,
+                        onCheckedChange = { viewModel.setVideo(video.copy(colorCorrection = it)) },
+                    )
+                }
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text("LCD 격자")
+                        Text("픽셀 사이에 선을 그립니다.", style = MaterialTheme.typography.bodySmall)
+                    }
+                    Switch(
+                        checked = video.lcdGrid,
+                        onCheckedChange = { viewModel.setVideo(video.copy(lcdGrid = it)) },
+                    )
+                }
+
+                Section("가상 패드")
+                PadSlider("크기", pad.scale, 0.7f..1.4f, percent(pad.scale)) {
+                    viewModel.setPadLayout(pad.copy(scale = it))
+                }
+                PadSlider("불투명도", pad.opacity, 0.2f..1f, percent(pad.opacity)) {
+                    viewModel.setPadLayout(pad.copy(opacity = it))
+                }
+                PadSlider("높이", pad.lift, 0f..1f, percent(pad.lift)) {
+                    viewModel.setPadLayout(pad.copy(lift = it))
+                }
+                // 슬라이더를 놓을 때마다 저장하면 파일 쓰기가 너무 잦아 화면을 떠날 때 저장한다.
+                DisposableEffect(Unit) {
+                    onDispose { viewModel.savePadLayout() }
+                }
+                TextButton(onClick = viewModel::resetPadLayout) { Text("가상 패드를 기본값으로") }
+
                 Section("소리와 햅틱")
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text("음소거", Modifier.weight(1f))
@@ -171,6 +240,23 @@ fun SettingsScreen(viewModel: GameViewModel, onBack: () -> Unit) {
                 )
             }
         }
+    }
+}
+
+private fun percent(value: Float) = "${(value * 100).roundToInt()}%"
+
+@Composable
+private fun PadSlider(
+    label: String,
+    value: Float,
+    range: ClosedFloatingPointRange<Float>,
+    text: String,
+    onChange: (Float) -> Unit,
+) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Text(label, Modifier.width(72.dp))
+        Slider(value = value, onValueChange = onChange, valueRange = range, modifier = Modifier.weight(1f))
+        Text(text, Modifier.width(48.dp), style = Mono)
     }
 }
 

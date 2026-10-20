@@ -10,7 +10,9 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
@@ -49,7 +51,12 @@ fun rgbaColor(rgba: UInt): Color {
  * 확대할 때 픽셀이 뭉개지지 않게 가장 가까운 이웃으로 늘린다. `onFrame`은 화면 갱신마다 부른다.
  */
 @Composable
-fun LcdScreen(emulator: Emulator, modifier: Modifier = Modifier, onFrame: () -> Unit = {}) {
+fun LcdScreen(
+    emulator: Emulator,
+    modifier: Modifier = Modifier,
+    grid: Boolean = false,
+    onFrame: () -> Unit = {},
+) {
     val size = remember { screenSize() }
     val bitmap = remember {
         Bitmap.createBitmap(size.width.toInt(), size.height.toInt(), Bitmap.Config.ARGB_8888)
@@ -83,6 +90,24 @@ fun LcdScreen(emulator: Emulator, modifier: Modifier = Modifier, onFrame: () -> 
             dstSize = IntSize(this.size.width.toInt(), this.size.height.toInt()),
             filterQuality = FilterQuality.None,
         )
+        if (grid) drawLcdGrid(image.width, image.height)
+    }
+}
+
+/** LCD 격자를 그리는 최소 배율. 이보다 작으면 격자가 화면을 가린다. */
+private const val GRID_MIN_SCALE = 3f
+private val GridColor = Color.Black.copy(alpha = 0.25f)
+
+/** 픽셀 사이에 어두운 선을 그려 LCD처럼 보이게 한다. */
+private fun DrawScope.drawLcdGrid(columns: Int, rows: Int) {
+    val cell = size.width / columns
+    if (cell < GRID_MIN_SCALE) return
+    val stroke = maxOf(1f, cell / 6f)
+    for (x in 1 until columns) {
+        drawLine(GridColor, Offset(x * cell, 0f), Offset(x * cell, size.height), stroke)
+    }
+    for (y in 1 until rows) {
+        drawLine(GridColor, Offset(0f, y * cell), Offset(size.width, y * cell), stroke)
     }
 }
 

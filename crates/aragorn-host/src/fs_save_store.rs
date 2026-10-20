@@ -8,6 +8,7 @@ use std::{
 
 /// ROM 옆의 `<ROM 이름>.sav` 파일. 다른 에뮬레이터(BGB, mGBA, VBA-M)와 같은 위치다.
 /// 스테이트는 같은 자리의 `<ROM 이름>.ss0`–`.ss9`, 썸네일은 `.ss0.thumb`(RGBA u32 LE)이다.
+/// 치트 목록은 `<ROM 이름>.cht`(JSON)다.
 pub struct FsSaveStore {
     path: PathBuf,
     rom_path: PathBuf,
@@ -34,6 +35,10 @@ impl FsSaveStore {
 
     fn thumbnail_path(&self, slot: u8) -> PathBuf {
         self.rom_path.with_extension(format!("ss{slot}.thumb"))
+    }
+
+    pub fn cheats_path(&self) -> PathBuf {
+        self.rom_path.with_extension("cht")
     }
 }
 
@@ -98,6 +103,14 @@ impl SaveStore for FsSaveStore {
             chunks.iter().map(|c| u32::from_le_bytes(*c)).collect(),
         ))
     }
+
+    fn load_cheats(&self) -> io::Result<Option<Vec<u8>>> {
+        read_optional(&self.cheats_path())
+    }
+
+    fn save_cheats(&self, data: &[u8]) -> io::Result<()> {
+        write_atomic(&self.cheats_path(), data)
+    }
 }
 
 #[cfg(test)]
@@ -135,6 +148,16 @@ mod tests {
             !dir.path().join("game.sav").exists(),
             "세이브 파일은 건드리지 않는다"
         );
+    }
+
+    #[test]
+    fn cheats_sit_next_to_rom() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = FsSaveStore::for_rom(&dir.path().join("game.gbc"));
+        assert_eq!(store.load_cheats().unwrap(), None);
+        store.save_cheats(b"[]").unwrap();
+        assert_eq!(fs::read(dir.path().join("game.cht")).unwrap(), b"[]");
+        assert_eq!(store.load_cheats().unwrap().as_deref(), Some(&b"[]"[..]));
     }
 
     #[test]

@@ -125,4 +125,69 @@ final class AragornUITests: XCTestCase {
         reopened.switches.firstMatch.tap()
         XCTAssertEqual(reopened.value as? String, "1")
     }
+
+    func testCheatsAreCheckedAddedAndToggled() {
+        openMenu("치트")
+        let code = app.textFields["cheat.code"]
+        XCTAssertTrue(code.waitForExistence(timeout: 5))
+        // 앞서 실패한 실행이 남긴 치트(세이브 옆 .cht)를 지운다.
+        for _ in 0..<5 where app.switches["cheat.0"].exists {
+            deleteFirstCheat()
+        }
+        code.tap()
+        code.typeText("nope")
+        app.buttons["더하기"].tap()
+        XCTAssertTrue(app.staticTexts["cheat.notice"].label.contains("코드가 아닙니다"))
+        code.tap()
+        code.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: 4) + "010138cd")
+        app.textFields["cheat.name"].tap()
+        app.textFields["cheat.name"].typeText("체력")
+        app.buttons["더하기"].tap()
+        let toggle = app.switches["cheat.0"]
+        XCTAssertTrue(toggle.waitForExistence(timeout: 5))
+        XCTAssertEqual(toggle.value as? String, "1", "더하면 켜진다")
+        toggle.switches.firstMatch.tap()
+        XCTAssertEqual(toggle.value as? String, "0")
+        // 다음 테스트를 위해 지운다.
+        deleteFirstCheat()
+        XCTAssertTrue(app.staticTexts["아직 치트가 없습니다."].waitForExistence(timeout: 5))
+    }
+
+    private func deleteFirstCheat() {
+        app.switches["cheat.0"].swipeLeft()
+        // 지우기 버튼 이름은 시뮬레이터 언어를 따른다.
+        app.buttons.matching(NSPredicate(format: "label IN %@", ["Delete", "삭제"])).firstMatch.tap()
+    }
+
+    func testRecentGameReopensWithoutPicker() {
+        app.terminate()
+        app.launchArguments = []
+        app.launch()
+        let recent = app.buttons["recent.ARAGORN TEST"].firstMatch
+        XCTAssertTrue(recent.waitForExistence(timeout: 10))
+        recent.tap()
+        XCTAssertTrue(notice.wait(for: \.label, toEqual: "ARAGORN TEST 실행 중", timeout: 10))
+    }
+
+    func testRewindButtonIsBesideFastForward() {
+        let rewind = element("pad.◀◀ 되감기")
+        XCTAssertTrue(rewind.waitForExistence(timeout: 5))
+        rewind.press(forDuration: 0.5)
+        XCTAssertTrue(app.staticTexts["status.speed"].wait(for: \.label, toEqual: "1배", timeout: 5))
+    }
+
+    func testPadSizeSettingMakesButtonsBigger() {
+        let before = element("pad.A").frame.width
+        openMenu("설정")
+        let slider = scrollTo(app.sliders.firstMatch)
+        slider.adjust(toNormalizedSliderPosition: 1.0)
+        app.buttons["돌아가기"].tap()
+        let after = element("pad.A")
+        XCTAssertTrue(after.waitForExistence(timeout: 5))
+        XCTAssertGreaterThan(after.frame.width, before + 4)
+        // 다음 테스트를 위해 되돌린다.
+        openMenu("설정")
+        scrollTo(app.buttons["가상 패드를 기본값으로"]).tap()
+        app.buttons["돌아가기"].tap()
+    }
 }

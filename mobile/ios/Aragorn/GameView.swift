@@ -4,6 +4,20 @@ private let bodyColor = Color(red: 0x1E / 255, green: 0x1E / 255, blue: 0x24 / 2
 private let keyColor = Color(red: 0x3A / 255, green: 0x3A / 255, blue: 0x44 / 255)
 private let keyPressed = Color(red: 0x5A / 255, green: 0x5A / 255, blue: 0x68 / 255)
 private let actionColor = Color(red: 0x8B / 255, green: 0x22 / 255, blue: 0x52 / 255)
+/// 패드를 아래에서 띄우는 최대 높이. 설정의 높이(0–1)에 곱한다.
+private let maxLift: CGFloat = 160
+/// 배율 1에서 방향키와 A/B를 나란히 놓는 데 필요한 폭 (세로 화면).
+private let portraitPadWidth: CGFloat = 320
+/// 배율 1에서 가로 화면 한쪽 칸에 필요한 폭과 높이.
+private let landscapeSideWidth: CGFloat = 170
+private let landscapeSideHeight: CGFloat = 230
+/// 툴바 ROM 메뉴와 빈 화면에 보일 최근 게임 수.
+private let recentShown = 5
+
+extension EnvironmentValues {
+    /// 가상 패드 버튼 크기 배율.
+    @Entry var padScale: CGFloat = 1
+}
 
 /// 게임 화면: 툴바, 게임 화면, 상태 줄, 가상 패드. 가로로 돌리면 방향키와 A/B가 양옆으로 간다.
 struct GameView: View {
@@ -14,6 +28,16 @@ struct GameView: View {
     var body: some View {
         GeometryReader { geometry in
             let landscape = geometry.size.width > geometry.size.height
+            let pad = model.padLayout
+            let lift = maxLift * CGFloat(pad.lift)
+            let lcdWidth = (geometry.size.height - 96) * 160 / 144
+            // 설정한 크기가 화면에 들어가지 않으면 들어가는 만큼만 키운다.
+            let fit = landscape
+                ? min((geometry.size.width - 32 - lcdWidth) / 2 / landscapeSideWidth,
+                      (geometry.size.height - 48 - lift) / landscapeSideHeight)
+                : (geometry.size.width - 32) / portraitPadWidth
+            let scale = min(CGFloat(pad.scale), max(fit, 0.5))
+            let opacity = Double(pad.opacity)
             VStack(spacing: 0) {
                 toolbar
                 if landscape {
@@ -24,18 +48,22 @@ struct GameView: View {
                             Spacer()
                             PadButton(label: "SELECT", button: .select, shape: .pill)
                         }
+                        .padding(.bottom, lift)
+                        .opacity(opacity)
                         .frame(maxWidth: .infinity)
                         VStack(spacing: 0) {
                             screen
                             status
                         }
-                        .frame(width: (geometry.size.height - 96) * 160 / 144)
+                        .frame(width: lcdWidth)
                         VStack {
                             Spacer()
                             ActionButtons()
                             Spacer()
                             PadButton(label: "START", button: .start, shape: .pill)
                         }
+                        .padding(.bottom, lift)
+                        .opacity(opacity)
                         .frame(maxWidth: .infinity)
                     }
                     .padding(.bottom, 8)
@@ -48,15 +76,18 @@ struct GameView: View {
                         Spacer()
                         ActionButtons()
                     }
+                    .opacity(opacity)
                     .padding(.bottom, 24)
                     HStack(spacing: 16) {
                         PadButton(label: "SELECT", button: .select, shape: .pill)
                         PadButton(label: "START", button: .start, shape: .pill)
                     }
-                    .padding(.bottom, 24)
+                    .opacity(opacity)
+                    .padding(.bottom, 24 + lift)
                 }
             }
             .padding(.horizontal, 16)
+            .environment(\.padScale, scale)
         }
         .background(bodyColor.ignoresSafeArea())
         .preferredColorScheme(.dark)
@@ -65,7 +96,18 @@ struct GameView: View {
 
     private var toolbar: some View {
         HStack(spacing: 4) {
-            Button("ROM", action: onOpenRom)
+            if model.recent.isEmpty {
+                Button("ROM", action: onOpenRom)
+            } else {
+                Menu("ROM") {
+                    Button("파일에서 열기…", action: onOpenRom)
+                    Section("최근 게임") {
+                        ForEach(model.recent.prefix(recentShown), id: \.path) { game in
+                            Button("\(game.title) · \(game.ago)") { model.openRecent(game.path) }
+                        }
+                    }
+                }
+            }
             Button("스테이트") {
                 model.refreshSlots()
                 slotsOpen = true
@@ -77,6 +119,8 @@ struct GameView: View {
             Spacer()
             Menu {
                 Button("설정") { model.page = .settings }
+                Button("치트") { model.page = .cheats }
+                    .disabled(model.emulator == nil)
                 Button("디버거") { model.page = .debugger }
                     .disabled(model.emulator == nil)
                 Button("업데이트 확인") { model.checkForUpdate(manual: true) }
@@ -92,11 +136,37 @@ struct GameView: View {
         if let emulator = model.emulator {
             LcdView(emulator: emulator, onFrame: model.poll)
                 .aspectRatio(160 / 144, contentMode: .fit)
+                .overlay { if model.video.lcdGrid { LcdGrid() } }
         } else {
             Rectangle()
                 .fill(.black)
                 .aspectRatio(160 / 144, contentMode: .fit)
-                .overlay(Text("ROM을 열어 주세요").foregroundStyle(.gray))
+                .overlay { recentList }
+        }
+    }
+
+    /// 게임이 없을 때 화면 자리. 최근 게임을 누르면 바로 연다.
+    @ViewBuilder private var recentList: some View {
+        if model.recent.isEmpty {
+            Text("ROM을 열어 주세요").foregroundStyle(.gray)
+        } else {
+            VStack(spacing: 0) {
+                Text("최근 게임").font(.caption).foregroundStyle(.gray).padding(.bottom, 4)
+                ForEach(model.recent.prefix(recentShown), id: \.path) { game in
+                    Button { model.openRecent(game.path) } label: {
+                        HStack {
+                            Text(game.title).foregroundStyle(.white).lineLimit(1)
+                            Spacer()
+                            Text(game.ago).font(.caption).foregroundStyle(.gray)
+                        }
+                        .padding(.vertical, 6)
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityIdentifier("recent.\(game.title)")
+                }
+            }
+            .padding(12)
         }
     }
 
@@ -112,17 +182,45 @@ struct GameView: View {
     }
 }
 
-/// A/B와 배속 버튼. 배속은 누르는 동안만 빨라진다 (데스크톱 배속 키와 같다).
+/// 픽셀 사이에 어두운 선을 그려 LCD처럼 보이게 한다. 칸이 3포인트보다 작으면 그리지 않는다.
+private struct LcdGrid: View {
+    var body: some View {
+        Canvas { context, size in
+            let cell = size.width / 160
+            guard cell >= 3 else { return }
+            var path = Path()
+            for x in 1..<160 {
+                path.move(to: CGPoint(x: CGFloat(x) * cell, y: 0))
+                path.addLine(to: CGPoint(x: CGFloat(x) * cell, y: size.height))
+            }
+            for y in 1..<144 {
+                path.move(to: CGPoint(x: 0, y: CGFloat(y) * cell))
+                path.addLine(to: CGPoint(x: size.width, y: CGFloat(y) * cell))
+            }
+            context.stroke(path, with: .color(.black.opacity(0.25)), lineWidth: max(0.5, cell / 6))
+        }
+        .allowsHitTesting(false)
+    }
+}
+
+/// A/B와 배속·되감기 버튼. 배속과 되감기는 누르는 동안만 동작한다 (데스크톱 키와 같다).
+/// 되감기를 끄면 되감기 버튼은 숨긴다.
 private struct ActionButtons: View {
     @Environment(GameModel.self) private var model
+    @Environment(\.padScale) private var scale
 
     var body: some View {
         VStack(spacing: 12) {
-            HStack(alignment: .center, spacing: 16) {
-                PadButton(label: "B", button: .b).padding(.top, 32)
-                PadButton(label: "A", button: .a).padding(.bottom, 32)
+            HStack(alignment: .center, spacing: 16 * scale) {
+                PadButton(label: "B", button: .b).padding(.top, 32 * scale)
+                PadButton(label: "A", button: .a).padding(.bottom, 32 * scale)
             }
-            HoldButton(label: "▶▶ 배속", shape: .pill, width: 88, height: 28, onHold: model.setFastTouch)
+            HStack(spacing: 8) {
+                if model.rewindEnabled {
+                    HoldButton(label: "◀◀ 되감기", shape: .pill, width: 80, height: 28, onHold: model.setRewindTouch)
+                }
+                HoldButton(label: "▶▶ 배속", shape: .pill, width: 80, height: 28, onHold: model.setFastTouch)
+            }
         }
     }
 }
@@ -131,6 +229,7 @@ private enum KeyShape { case circle, pill, key }
 
 private struct PadButton: View {
     @Environment(GameModel.self) private var model
+    @Environment(\.padScale) private var scale
     let label: String
     let button: GbButton
     var shape: KeyShape = .circle
@@ -140,8 +239,8 @@ private struct PadButton: View {
         HoldButton(
             label: label,
             shape: shape,
-            width: pill ? 72 : 64,
-            height: pill ? 28 : 64,
+            width: (pill ? 72 : 64) * scale,
+            height: (pill ? 28 : 64) * scale,
             color: button == .a || button == .b ? actionColor : keyColor
         ) { model.setButton(button, pressed: $0) }
     }
@@ -188,9 +287,10 @@ private struct HoldButton: View {
  */
 private struct DPad: View {
     @Environment(GameModel.self) private var model
+    @Environment(\.padScale) private var scale
     let onButton: (GbButton, Bool) -> Void
     @State private var pressed: Set<GbButton> = []
-    private let key: CGFloat = 52
+    private var key: CGFloat { 52 * scale }
 
     var body: some View {
         ZStack {

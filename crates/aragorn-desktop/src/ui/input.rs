@@ -8,7 +8,7 @@ use std::collections::HashSet;
 /// 설정의 키보드 매핑을 egui 키로 바꾼 것.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Keymap {
-    keys: [(Action, Option<Key>); 11],
+    keys: [(Action, Option<Key>); 12],
 }
 
 impl Keymap {
@@ -73,6 +73,7 @@ pub struct PadInput {
 pub struct InputFrame {
     pub buttons: [(Button, bool); 8],
     pub fast_forward: bool,
+    pub rewind: bool,
     pub pause_pressed: bool,
     pub mute_pressed: bool,
 }
@@ -102,6 +103,7 @@ pub fn gather(
             (button, held(action))
         }),
         fast_forward: held(Action::FastForward),
+        rewind: held(Action::Rewind),
         pause_pressed: keymap.key(Action::Pause).is_some_and(&key_pressed)
             || pad.pressed.contains(&Action::Pause),
         mute_pressed: keymap.key(Action::Mute).is_some_and(&key_pressed)
@@ -168,6 +170,13 @@ mod tests {
         assert_eq!(pressed(&frame), [Button::B, Button::Start]);
         assert!(frame.fast_forward);
         assert!(frame.pause_pressed);
+        assert!(!frame.rewind);
+        let pad = PadInput {
+            held: vec![Action::Rewind],
+            pressed: vec![],
+        };
+        assert!(gather(&keymap, |_| false, |_| false, &pad).rewind);
+        assert!(gather(&keymap, |k| k == Key::R, |_| false, &PadInput::default()).rewind);
     }
 
     fn key_event(key: Key, repeat: bool) -> egui::Event {

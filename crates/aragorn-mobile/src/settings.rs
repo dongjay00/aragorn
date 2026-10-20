@@ -1,4 +1,5 @@
-//! 앱 설정: 키·게임패드 매핑, 속도, 음소거, 건너뛴 업데이트 버전, 버튼 햅틱. 데스크톱과 같은 `Config`에
+//! 앱 설정: 키·게임패드 매핑, 속도, 음소거, 건너뛴 업데이트 버전, 버튼 햅틱, 화면 필터, 되감기,
+//! 가상 패드 모양, 최근 게임. 데스크톱과 같은 `Config`에
 //! 모바일 전용 항목을 더해 JSON 파일 하나로 저장하고, 바꿀 때마다 바로 쓴다.
 //!
 //! 키 이름은 플랫폼마다 다르다. 데스크톱(egui·gilrs 이름)과도 달라 기본값을 플랫폼마다 둔다.
@@ -8,12 +9,15 @@
 
 use crate::{
     EmulatorError,
-    types::{FastSpeed, InputAction, InputDevice, Speed},
+    types::{FastSpeed, InputAction, InputDevice, Speed, VideoSettings},
 };
 use aragorn_app::{
     config::Config,
-    input::{Bindings, InputConfig},
+    input::{Action, Bindings, InputConfig},
+    recent::{self, RecentGame},
+    session::{Clock, ago_text},
 };
+use aragorn_host::SystemClock;
 use serde::{Deserialize, Serialize};
 use std::{
     fs::{self, File},
@@ -33,7 +37,7 @@ pub fn keyboard_default() -> Bindings {
 
 fn keyboard_default_ios() -> Bindings {
     Bindings::from_names([
-        "RIGHT", "LEFT", "UP", "DOWN", "X", "Z", "DELETE", "RETURN", "TAB", "ESCAPE", "M",
+        "RIGHT", "LEFT", "UP", "DOWN", "X", "Z", "DELETE", "RETURN", "TAB", "ESCAPE", "M", "R",
     ])
 }
 
@@ -50,10 +54,12 @@ fn keyboard_default_android() -> Bindings {
         "TAB",
         "ESCAPE",
         "M",
+        "R",
     ])
 }
 
-/// 게임패드 기본값 (Android와 iOS가 같다). 데스크톱처럼 아래 버튼이 A, 오른쪽 버튼이 B, 오른쪽 트리거가 배속이다.
+/// 게임패드 기본값 (Android와 iOS가 같다). 데스크톱처럼 아래 버튼이 A, 오른쪽 버튼이 B, 오른쪽 트리거가 배속,
+/// 왼쪽 트리거가 되감기다.
 pub fn gamepad_default() -> Bindings {
     Bindings::from_names([
         "DPAD_RIGHT",
@@ -67,7 +73,85 @@ pub fn gamepad_default() -> Bindings {
         "BUTTON_R2",
         "",
         "",
+        "BUTTON_L2",
     ])
+}
+
+/// 이 버전에 새로 생긴 기능(되감기)이 없는 설정 파일을 읽으면, 그 기능에는 데스크톱 기본 키 이름이 들어온다.
+/// 플랫폼 기본 키로 바꾼다. 그 키를 이미 다른 기능에 지정했으면 비워 둔다.
+fn use_platform_names_for_new_actions(input: &mut InputConfig) {
+    let pairs = [
+        (
+            &mut input.keyboard,
+            Bindings::keyboard_default(),
+            keyboard_default(),
+        ),
+        (
+            &mut input.gamepad,
+            Bindings::gamepad_default(),
+            gamepad_default(),
+        ),
+    ];
+    for (bindings, desktop, platform) in pairs {
+        let action = Action::Rewind;
+        let name = bindings.get(action);
+        if name.is_empty() || name != desktop.get(action) || name == platform.get(action) {
+            continue;
+        }
+        let wanted = platform.get(action);
+        let taken = bindings.actions_for(wanted).any(|a| a != action);
+        let name = if taken { "" } else { wanted };
+        bindings.bind(action, name);
+    }
+}
+
+/// 가상 패드 모양. 범위를 벗어난 값은 범위 안으로 맞춘다.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, uniffi::Record)]
+#[serde(default)]
+pub struct PadLayout {
+    /// 버튼 크기 배율 (0.7–1.4)
+    pub scale: f32,
+    /// 불투명도 (0.2–1.0)
+    pub opacity: f32,
+    /// 화면 아래에서 띄우는 정도 (0–1). 1이면 앱이 정한 최대 높이만큼 올린다.
+    pub lift: f32,
+}
+
+impl Default for PadLayout {
+    fn default() -> Self {
+        Self {
+            scale: 1.0,
+            opacity: 1.0,
+            lift: 0.0,
+        }
+    }
+}
+
+impl PadLayout {
+    fn clamped(self) -> Self {
+        let clamp = |v: f32, lo: f32, hi: f32, default: f32| {
+            if v.is_finite() {
+                v.clamp(lo, hi)
+            } else {
+                default
+            }
+        };
+        Self {
+            scale: clamp(self.scale, 0.7, 1.4, 1.0),
+            opacity: clamp(self.opacity, 0.2, 1.0, 1.0),
+            lift: clamp(self.lift, 0.0, 1.0, 0.0),
+        }
+    }
+}
+
+/// 최근 게임 하나.
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct RecentRom {
+    /// 앱이 복사해 둔 ROM 경로
+    pub path: String,
+    pub title: String,
+    /// `방금`, `3일 전`
+    pub ago: String,
 }
 
 fn input_default() -> InputConfig {
@@ -94,6 +178,7 @@ struct MobileConfig {
     app: Config,
     /// 가상 패드를 누를 때 햅틱(진동)을 낸다.
     haptics: bool,
+    pad: PadLayout,
 }
 
 impl Default for MobileConfig {
@@ -101,6 +186,7 @@ impl Default for MobileConfig {
         Self {
             app: config_default(),
             haptics: true,
+            pad: PadLayout::default(),
         }
     }
 }
@@ -123,6 +209,11 @@ impl Settings {
                 serde_json::from_slice(&data)
                     .map_err(|e| log::warn!("설정 파일을 읽을 수 없어 기본값을 씁니다: {e}"))
                     .ok()
+            })
+            .map(|mut config: MobileConfig| {
+                use_platform_names_for_new_actions(&mut config.app.input);
+                config.pad = config.pad.clamped();
+                config
             })
             .unwrap_or_default();
         Arc::new(Self {
@@ -201,6 +292,60 @@ impl Settings {
 
     pub fn set_haptics(&self, on: bool) -> Result<(), EmulatorError> {
         self.change(|config| config.haptics = on)
+    }
+
+    pub fn pad_layout(&self) -> PadLayout {
+        self.config().pad
+    }
+
+    pub fn set_pad_layout(&self, layout: PadLayout) -> Result<(), EmulatorError> {
+        self.change(|config| config.pad = layout.clamped())
+    }
+
+    pub fn video(&self) -> VideoSettings {
+        self.config().app.video.into()
+    }
+
+    pub fn set_video(&self, video: VideoSettings) -> Result<(), EmulatorError> {
+        self.change(|config| config.app.video = video.into())
+    }
+
+    /// 되감기를 쓸지. 기본은 켜짐.
+    pub fn rewind_enabled(&self) -> bool {
+        self.config().app.rewind.enabled
+    }
+
+    pub fn set_rewind_enabled(&self, on: bool) -> Result<(), EmulatorError> {
+        self.change(|config| config.app.rewind.enabled = on)
+    }
+
+    /// 최근에 연 게임, 최근 것부터.
+    pub fn recent_games(&self) -> Vec<RecentRom> {
+        let now = SystemClock.now_unix();
+        self.config()
+            .app
+            .recent
+            .iter()
+            .map(|game| RecentRom {
+                path: game.path.clone(),
+                title: game.title.clone(),
+                ago: ago_text(now, game.opened_at),
+            })
+            .collect()
+    }
+
+    /// 목록 맨 앞에 넣는다. 같은 경로는 한 번만 남는다.
+    pub fn add_recent(&self, path: String, title: String) -> Result<(), EmulatorError> {
+        let game = RecentGame {
+            path,
+            title,
+            opened_at: SystemClock.now_unix(),
+        };
+        self.change(|config| recent::add(&mut config.app.recent, game))
+    }
+
+    pub fn remove_recent(&self, path: String) -> Result<(), EmulatorError> {
+        self.change(|config| recent::remove(&mut config.app.recent, &path))
     }
 }
 
@@ -360,6 +505,88 @@ mod tests {
         assert!(settings.muted());
         assert_eq!(settings.binding(InputDevice::Keyboard, InputAction::A), "Q");
         assert!(settings.haptics());
+    }
+
+    #[test]
+    fn file_from_before_rewind_gets_platform_rewind_keys() {
+        let dir = tempfile::tempdir().unwrap();
+        let old = Settings::open(dir.path().join("old.json").to_string_lossy().into_owned());
+        old.bind(InputDevice::Keyboard, InputAction::B, "R".into())
+            .unwrap();
+        let mut json: serde_json::Value =
+            serde_json::from_slice(&fs::read(dir.path().join("old.json")).unwrap()).unwrap();
+        for device in ["keyboard", "gamepad"] {
+            json["input"][device]
+                .as_object_mut()
+                .unwrap()
+                .remove("rewind");
+        }
+        fs::write(
+            dir.path().join("config.json"),
+            serde_json::to_vec(&json).unwrap(),
+        )
+        .unwrap();
+
+        let settings = open(&dir);
+        assert_eq!(
+            settings.binding(InputDevice::Gamepad, InputAction::Rewind),
+            "BUTTON_L2",
+            "데스크톱 이름(LeftTrigger)이 아니다"
+        );
+        assert_eq!(
+            settings.binding(InputDevice::Keyboard, InputAction::Rewind),
+            "",
+            "R은 이미 B에 지정했다"
+        );
+        assert_eq!(settings.binding(InputDevice::Keyboard, InputAction::B), "R");
+        assert!(settings.rewind_enabled());
+    }
+
+    #[test]
+    fn pad_layout_is_clamped_and_saved() {
+        let dir = tempfile::tempdir().unwrap();
+        let settings = open(&dir);
+        assert_eq!(settings.pad_layout(), PadLayout::default());
+        settings
+            .set_pad_layout(PadLayout {
+                scale: 3.0,
+                opacity: 0.5,
+                lift: f32::NAN,
+            })
+            .unwrap();
+        let layout = open(&dir).pad_layout();
+        assert_eq!((layout.scale, layout.opacity, layout.lift), (1.4, 0.5, 0.0));
+    }
+
+    #[test]
+    fn video_rewind_and_recent_games_are_saved() {
+        use crate::types::Palette;
+        let dir = tempfile::tempdir().unwrap();
+        let settings = open(&dir);
+        settings
+            .set_video(VideoSettings {
+                palette: Palette::Gray,
+                color_correction: true,
+                lcd_grid: true,
+            })
+            .unwrap();
+        settings.set_rewind_enabled(false).unwrap();
+        settings.add_recent("/a.gb".into(), "A".into()).unwrap();
+        settings.add_recent("/b.gb".into(), "B".into()).unwrap();
+        settings.add_recent("/a.gb".into(), "A".into()).unwrap();
+
+        let reloaded = open(&dir);
+        assert_eq!(reloaded.video().palette, Palette::Gray);
+        assert!(reloaded.video().lcd_grid);
+        assert!(!reloaded.rewind_enabled());
+        let recent = reloaded.recent_games();
+        assert_eq!(
+            recent.iter().map(|g| &*g.title).collect::<Vec<_>>(),
+            ["A", "B"]
+        );
+        assert_eq!(recent[0].ago, "방금");
+        reloaded.remove_recent("/a.gb".into()).unwrap();
+        assert_eq!(reloaded.recent_games().len(), 1);
     }
 
     #[test]

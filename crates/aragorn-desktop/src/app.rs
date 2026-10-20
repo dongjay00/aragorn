@@ -2,6 +2,7 @@ use crate::{
     adapters::{CpalAudio, FsSaveStore, Gamepads, SystemClock, UnavailableUpdater},
     build_info,
     ui::{
+        cheats::{CheatCommand, CheatsView},
         debugger::{DebugCommand, DebuggerView},
         input::{self, InputFrame, Keymap, TypingGuard},
         io_view::IoView,
@@ -16,6 +17,7 @@ use crate::{
 use aragorn_app::{
     config::{Config, ConfigStore, UpdateConfig},
     pacing::{FastForward, RunMode, SpeedControl, UNLIMITED_BUDGET},
+    recent::{self, RecentGame},
     session::{Clock, Session},
     update::{UpdateCommand, UpdateEvent, UpdateFlow, UpdateSource, Updater},
 };
@@ -71,6 +73,7 @@ pub fn mode_text(mode: RunMode) -> Option<String> {
     match mode {
         RunMode::Normal => None,
         RunMode::Paused => Some("일시정지".to_string()),
+        RunMode::Rewind => Some("되감기".to_string()),
         RunMode::Fast(FastForward::Unlimited) => Some("배속 (무제한)".to_string()),
         RunMode::Fast(speed) => Some(format!("배속 ({})", speed.label())),
     }
@@ -81,7 +84,7 @@ pub fn mode_text(mode: RunMode) -> Option<String> {
 pub fn repaint_delay(mode: RunMode) -> Duration {
     match mode {
         RunMode::Paused => Duration::from_millis(100),
-        RunMode::Normal | RunMode::Fast(_) => Duration::ZERO,
+        RunMode::Normal | RunMode::Fast(_) | RunMode::Rewind => Duration::ZERO,
     }
 }
 
@@ -138,6 +141,7 @@ pub struct AragornApp {
     debugger: DebuggerView,
     vram: VramView,
     io: IoView,
+    cheats: CheatsView,
     typing_guard: TypingGuard,
 }
 
@@ -184,6 +188,7 @@ impl AragornApp {
             debugger: DebuggerView::default(),
             vram: VramView::default(),
             io: IoView::default(),
+            cheats: CheatsView::default(),
             typing_guard: TypingGuard::default(),
         };
         if app.worker.is_some() {
@@ -208,7 +213,10 @@ impl AragornApp {
                     self.flow.current(),
                     session.title()
                 )));
+                self.screen
+                    .set_video(self.config.video, session.debug().cgb());
                 self.screen.update(ctx, session.framebuffer());
+                self.remember_recent(path, session.title());
                 self.notice = Some(format!("{} 실행 중", session.title()));
                 // 일시정지한 채 다른 게임을 열어도 바로 시작한다.
                 self.speed.resume();
@@ -219,6 +227,7 @@ impl AragornApp {
                     session.set_channel_muted(channel, muted);
                 }
                 session.set_sound_off(self.config.audio.muted);
+                session.set_rewind_enabled(self.config.rewind.enabled);
                 self.session = Some(session);
                 self.last_tick = Instant::now();
                 self.collect_session_errors();
@@ -226,7 +235,66 @@ impl AragornApp {
             Err(message) => {
                 log::warn!("{message}");
                 self.notice = Some(message);
+                // 지우거나 옮긴 파일은 최근 목록에서 뺀다.
+                if !path.exists() {
+                    recent::remove(&mut self.config.recent, &path.to_string_lossy());
+                    self.save_config();
+                }
             }
+        }
+    }
+
+    /// 최근 게임 목록 맨 앞에 넣는다. 헤더에 제목이 없으면 파일 이름을 쓴다.
+    fn remember_recent(&mut self, path: &Path, title: &str) {
+        let path = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+        let title = if title.is_empty() {
+            path.file_name()
+                .map_or_else(String::new, |n| n.to_string_lossy().into_owned())
+        } else {
+            title.to_string()
+        };
+        recent::add(
+            &mut self.config.recent,
+            RecentGame {
+                path: path.to_string_lossy().into_owned(),
+                title,
+                opened_at: SystemClock.now_unix(),
+            },
+        );
+        self.save_config();
+    }
+
+    /// 치트 창의 요청을 처리한다.
+    fn run_cheat_command(&mut self, command: CheatCommand) {
+        let Some(session) = &mut self.session else {
+            return;
+        };
+        let added = matches!(command, CheatCommand::Add { .. });
+        let result = match command {
+            CheatCommand::Add { code, name } => session.add_cheat(&code, &name),
+            CheatCommand::SetEnabled(index, enabled) => session.set_cheat_enabled(index, enabled),
+            CheatCommand::Remove(index) => session.remove_cheat(index),
+        };
+        match result {
+            Ok(()) if added => {
+                self.cheats.added();
+                self.notice = Some("치트를 켰습니다".to_string());
+            }
+            Ok(()) => {}
+            Err(message) => {
+                log::warn!("{message}");
+                self.notice = Some(message);
+            }
+        }
+    }
+
+    /// 화면 필터와 되감기 설정을 지금 게임에 적용한다.
+    fn apply_play_settings(&mut self, ctx: &egui::Context) {
+        if let Some(session) = &mut self.session {
+            session.set_rewind_enabled(self.config.rewind.enabled);
+            self.screen
+                .set_video(self.config.video, session.debug().cgb());
+            self.screen.update(ctx, session.framebuffer());
         }
     }
 
@@ -365,9 +433,10 @@ impl AragornApp {
         if self.exit_handled || self.flow.blocks_emulation() {
             return;
         }
-        let (fast_held, pause_pressed) = input
-            .as_ref()
-            .map_or((false, false), |f| (f.fast_forward, f.pause_pressed));
+        let (fast_held, rewind_held, pause_pressed) =
+            input.as_ref().map_or((false, false, false), |f| {
+                (f.fast_forward, f.rewind, f.pause_pressed)
+            });
         if pause_pressed {
             self.speed.toggle_pause();
         }
@@ -378,6 +447,7 @@ impl AragornApp {
         let input_config = &self.config.input;
         self.mode = self.speed.mode(
             fast_held,
+            rewind_held,
             input_config.fast_forward,
             input_config.base_speed,
         );
@@ -506,6 +576,7 @@ impl eframe::App for AragornApp {
         let mut events = Vec::new();
 
         let mut open_requested = false;
+        let mut recent_requested: Option<PathBuf> = None;
         let mut slot_command = None;
         egui::Panel::top("toolbar").show(ui, |ui| {
             ui.horizontal(|ui| {
@@ -518,8 +589,21 @@ impl eframe::App for AragornApp {
                     ui.checkbox(&mut self.vram.open, "VRAM");
                     ui.checkbox(&mut self.io.open, "I/O");
                 });
+                if !self.config.recent.is_empty() {
+                    ui.menu_button("최근 게임", |ui| {
+                        for game in &self.config.recent {
+                            if ui.button(&game.title).on_hover_text(&game.path).clicked() {
+                                recent_requested = Some(PathBuf::from(&game.path));
+                                ui.close();
+                            }
+                        }
+                    });
+                }
                 if ui.button("설정").clicked() {
                     self.settings.open = !self.settings.open;
+                }
+                if self.session.is_some() && ui.button("치트").clicked() {
+                    self.cheats.open = !self.cheats.open;
                 }
                 if let Some(session) = &self.session {
                     let now = SystemClock.now_unix();
@@ -585,6 +669,21 @@ impl eframe::App for AragornApp {
                     ui.label(
                         "ROM 열기 버튼을 누르거나 ROM 파일(.gb, .gbc)을 창에 끌어다 놓으세요.",
                     );
+                    if !self.config.recent.is_empty() {
+                        ui.add_space(16.0);
+                        ui.strong("최근 게임");
+                        let now = SystemClock.now_unix();
+                        for game in &self.config.recent {
+                            let text = format!(
+                                "{} · {}",
+                                game.title,
+                                aragorn_app::session::ago_text(now, game.opened_at)
+                            );
+                            if ui.button(text).on_hover_text(&game.path).clicked() {
+                                recent_requested = Some(PathBuf::from(&game.path));
+                            }
+                        }
+                    }
                 });
             }
         });
@@ -608,8 +707,21 @@ impl eframe::App for AragornApp {
             let ctx = ui.ctx().clone();
             self.run_slot_command(&ctx, command);
         }
-        if self.settings.show(ui.ctx(), &mut self.config.input) {
+        if self.settings.show(ui.ctx(), &mut self.config) {
             self.input_config_changed();
+            let ctx = ui.ctx().clone();
+            self.apply_play_settings(&ctx);
+        }
+        let cheat_commands = match &self.session {
+            Some(session) => self.cheats.show(ui.ctx(), session.cheats()),
+            None => Vec::new(),
+        };
+        for command in cheat_commands {
+            self.run_cheat_command(command);
+        }
+        if let Some(path) = recent_requested {
+            let ctx = ui.ctx().clone();
+            self.open_rom(&ctx, &path);
         }
 
         for event in events {
@@ -765,6 +877,50 @@ mod tests {
 
         let reloaded = load_session(&path).unwrap();
         assert_eq!(reloaded.battery_ram().unwrap()[0], 0x42);
+    }
+
+    /// 저장한 설정을 테스트가 볼 수 있는 저장소.
+    #[derive(Clone, Default)]
+    struct MemoryConfig(std::rc::Rc<std::cell::RefCell<Option<Config>>>);
+
+    impl ConfigStore for MemoryConfig {
+        fn load(&self) -> Config {
+            self.0.borrow().clone().unwrap_or_default()
+        }
+        fn save(&self, config: &Config) -> std::io::Result<()> {
+            *self.0.borrow_mut() = Some(config.clone());
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn opened_rom_goes_to_recent_games_and_missing_one_leaves() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("game.gb");
+        let mut rom = vec![0u8; 0x8000];
+        rom[0x0100..0x0102].copy_from_slice(&[0x18, 0xFE]);
+        rom[0x0134..0x0138].copy_from_slice(b"GAME");
+        std::fs::write(&path, &rom).unwrap();
+        let store = MemoryConfig::default();
+        let ctx = egui::Context::default();
+        let mut app = AragornApp::new(
+            &ctx,
+            AppDeps {
+                config_store: Box::new(store.clone()),
+                source: None,
+                updater: None,
+                release_page: None,
+                initial_rom: Some(path.clone()),
+            },
+        );
+        let saved = store.load();
+        assert_eq!(saved.recent.len(), 1);
+        assert_eq!(saved.recent[0].title, "GAME");
+
+        std::fs::remove_file(&path).unwrap();
+        let canonical = PathBuf::from(&saved.recent[0].path);
+        app.open_rom(&ctx, &canonical);
+        assert!(store.load().recent.is_empty(), "지운 파일은 목록에서 뺀다");
     }
 
     #[test]

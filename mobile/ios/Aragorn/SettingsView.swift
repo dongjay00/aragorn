@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// 데스크톱 설정 창과 같은 항목: 키·게임패드 매핑, 기본 속도, 배속 속도, 음소거, 업데이트.
+/// 데스크톱 설정 창과 같은 항목(키·게임패드 매핑, 속도, 화면, 되감기, 음소거, 업데이트)과 가상 패드 모양.
 struct SettingsView: View {
     @Environment(GameModel.self) private var model
 
@@ -55,6 +55,37 @@ struct SettingsView: View {
                 }
 
                 Section {
+                    Toggle("되감기", isOn: Binding(get: { model.rewindEnabled }, set: model.setRewindEnabled))
+                } header: {
+                    Text("되감기")
+                } footer: {
+                    Text("되감기 버튼·키를 누르는 동안 최근 약 20초를 거꾸로 돌립니다. 끄면 메모리를 아낍니다.")
+                }
+
+                Section {
+                    Picker("흑백 게임 색", selection: videoBinding(\.palette)) {
+                        ForEach(allPalettes(), id: \.self) { Text(paletteLabel(palette: $0)).tag($0) }
+                    }
+                    Toggle("컬러 게임 색 보정", isOn: videoBinding(\.colorCorrection))
+                    Toggle("LCD 격자", isOn: videoBinding(\.lcdGrid))
+                } header: {
+                    Text("화면")
+                } footer: {
+                    Text("색 보정은 게임보이 컬러 화면처럼 색을 덜 진하게 합니다. LCD 격자는 픽셀 사이에 선을 그립니다.")
+                }
+
+                Section {
+                    padSlider("크기", \.scale, 0.7...1.4)
+                    padSlider("불투명도", \.opacity, 0.2...1)
+                    padSlider("높이", \.lift, 0...1)
+                    Button("가상 패드를 기본값으로", action: model.resetPadLayout)
+                } header: {
+                    Text("가상 패드")
+                } footer: {
+                    Text("화면에 들어가지 않을 만큼 크게 하면 들어가는 만큼만 커집니다.")
+                }
+
+                Section {
                     Toggle("음소거", isOn: Binding(get: { model.muted }, set: model.setMuted))
                     Toggle("버튼 햅틱", isOn: Binding(get: { model.haptics }, set: model.setHaptics))
                 } header: {
@@ -93,6 +124,37 @@ struct SettingsView: View {
                 }
             }
         }
+    }
+
+    private func videoBinding<T>(_ key: WritableKeyPath<VideoSettings, T>) -> Binding<T> {
+        Binding(
+            get: { model.video[keyPath: key] },
+            set: {
+                var video = model.video
+                video[keyPath: key] = $0
+                model.setVideo(video)
+            }
+        )
+    }
+
+    /// 움직이는 동안에는 화면에만 반영하고, 놓으면 저장한다.
+    private func padSlider(
+        _ label: String, _ key: WritableKeyPath<PadLayout, Float>, _ range: ClosedRange<Float>
+    ) -> some View {
+        LabeledContent(label) {
+            HStack {
+                Slider(
+                    value: Binding(get: { model.padLayout[keyPath: key] }, set: { model.padLayout[keyPath: key] = $0 }),
+                    in: range
+                ) { editing in
+                    if !editing { model.savePadLayout() }
+                }
+                Text("\(Int((model.padLayout[keyPath: key] * 100).rounded()))%")
+                    .font(mono)
+                    .frame(width: 44, alignment: .trailing)
+            }
+        }
+        .accessibilityIdentifier("pad.slider.\(label)")
     }
 
     private func cell(_ device: InputDevice, _ action: InputAction) -> some View {
