@@ -57,6 +57,7 @@ fun SettingsScreen(viewModel: GameViewModel, onBack: () -> Unit) {
     val haptics by viewModel.haptics.collectAsStateWithLifecycle()
     val video by viewModel.video.collectAsStateWithLifecycle()
     val rewindEnabled by viewModel.rewindEnabled.collectAsStateWithLifecycle()
+    val autoResume by viewModel.autoResume.collectAsStateWithLifecycle()
     val pad by viewModel.padLayout.collectAsStateWithLifecycle()
     val update by viewModel.update.collectAsStateWithLifecycle()
     val notice by viewModel.notice.collectAsStateWithLifecycle()
@@ -133,6 +134,19 @@ fun SettingsScreen(viewModel: GameViewModel, onBack: () -> Unit) {
                     "2배·4배에서는 소리가 빠르고 높게 들립니다. 무제한에서는 소리가 나지 않습니다.",
                     style = MaterialTheme.typography.bodySmall,
                 )
+
+                Section("이어하기")
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text("이어하기")
+                        Text(
+                            "앱을 닫거나 다른 게임을 열 때의 자리를 남기고, 다시 열면 그 자리에서 이어서 합니다. " +
+                                "메뉴의 \"처음부터 다시 시작\"으로 게임 세이브에서 시작할 수 있습니다.",
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    }
+                    Switch(checked = autoResume, onCheckedChange = viewModel::setAutoResume)
+                }
 
                 Section("되감기")
                 Row(verticalAlignment = Alignment.CenterVertically) {

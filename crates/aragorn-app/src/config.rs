@@ -13,6 +13,7 @@ pub struct Config {
     pub audio: AudioConfig,
     pub video: VideoConfig,
     pub rewind: RewindConfig,
+    pub resume: ResumeConfig,
     /// 최근에 연 게임, 최근 것부터.
     #[serde(deserialize_with = "lenient_recent")]
     pub recent: Vec<RecentGame>,
@@ -32,6 +33,19 @@ pub struct RewindConfig {
 }
 
 impl Default for RewindConfig {
+    fn default() -> Self {
+        Self { enabled: true }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ResumeConfig {
+    /// 게임을 닫을 때 지금 상태를 남기고, 다시 열면 그 자리에서 이어서 한다.
+    pub enabled: bool,
+}
+
+impl Default for ResumeConfig {
     fn default() -> Self {
         Self { enabled: true }
     }
@@ -122,6 +136,7 @@ mod tests {
         let c: Config = serde_json::from_str(r#"{"recent":[{"path":1}]}"#).unwrap();
         assert!(c.recent.is_empty());
         assert!(c.rewind.enabled, "되감기는 기본으로 켠다");
+        assert!(c.resume.enabled, "이어하기도 기본으로 켠다");
         assert_eq!(c.video, VideoConfig::default());
     }
 

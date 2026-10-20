@@ -11,7 +11,7 @@ import io.github.dongjay00.aragorn.core.InputDevice
  * (`DPAD_UP`, `BUTTON_A`, `X`), 설정 파일에 그대로 저장된다.
  *
  * 많은 게임패드가 방향키와 트리거를 버튼이 아니라 축(hat, trigger)으로 보낸다. 축은 같은 이름의 버튼으로
- * 바꿔 버튼과 똑같이 다룬다.
+ * 바꿔 버튼과 똑같이 다룬다. 왼쪽 아날로그 스틱도 방향키(`DPAD_*`)로 다룬다.
  */
 object GameInput {
     /** 데스크톱처럼 F1–F10은 스테이트 단축키라 키 설정에 쓸 수 없다. */
@@ -64,11 +64,13 @@ class AxisButtons {
             event.getAxisValue(MotionEvent.AXIS_RTRIGGER),
             event.getAxisValue(MotionEvent.AXIS_GAS),
         )
+        val stickX = event.getAxisValue(MotionEvent.AXIS_X)
+        val stickY = event.getAxisValue(MotionEvent.AXIS_Y)
         val now = buildSet {
-            if (hatX < -HALF) add("DPAD_LEFT")
-            if (hatX > HALF) add("DPAD_RIGHT")
-            if (hatY < -HALF) add("DPAD_UP")
-            if (hatY > HALF) add("DPAD_DOWN")
+            if (hatX < -HALF || stickX < -HALF) add("DPAD_LEFT")
+            if (hatX > HALF || stickX > HALF) add("DPAD_RIGHT")
+            if (hatY < -HALF || stickY < -HALF) add("DPAD_UP")
+            if (hatY > HALF || stickY > HALF) add("DPAD_DOWN")
             if (left > HALF) add("BUTTON_L2")
             if (right > HALF) add("BUTTON_R2")
         }

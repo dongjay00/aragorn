@@ -119,6 +119,10 @@ struct GameView: View {
             Spacer()
             Menu {
                 Button("설정") { model.page = .settings }
+                Button("스크린샷", action: model.saveScreenshot)
+                    .disabled(model.emulator == nil)
+                Button("처음부터 다시 시작", action: model.restart)
+                    .disabled(model.emulator == nil)
                 Button("치트") { model.page = .cheats }
                     .disabled(model.emulator == nil)
                 Button("디버거") { model.page = .debugger }

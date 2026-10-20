@@ -9,7 +9,7 @@ final class AragornUITests: XCTestCase {
         app = XCUIApplication()
         app.launchArguments = ["-rom", try makeRom().path]
         app.launch()
-        XCTAssertTrue(notice.wait(for: \.label, toEqual: "ARAGORN TEST 실행 중", timeout: 10))
+        XCTAssertTrue(gameStarted())
     }
 
     /// 제자리 점프(`JR -2`, $0100)만 하는 ROM.
@@ -25,6 +25,12 @@ final class AragornUITests: XCTestCase {
     }
 
     private var notice: XCUIElement { app.staticTexts["status.notice"] }
+
+    /// 게임이 열렸는지. 앞선 테스트가 이어하기를 남겼으면 "…이어서 합니다"로 시작한다.
+    private func gameStarted() -> Bool {
+        let started = NSPredicate(format: "label BEGINSWITH %@", "ARAGORN TEST")
+        return XCTWaiter.wait(for: [expectation(for: started, evaluatedWith: notice)], timeout: 10) == .completed
+    }
 
     private func element(_ identifier: String) -> XCUIElement {
         app.descendants(matching: .any)[identifier]
@@ -117,7 +123,7 @@ final class AragornUITests: XCTestCase {
         // 다시 켜도 꺼진 채로 남는다.
         app.terminate()
         app.launch()
-        XCTAssertTrue(notice.wait(for: \.label, toEqual: "ARAGORN TEST 실행 중", timeout: 10))
+        XCTAssertTrue(gameStarted())
         openMenu("설정")
         let reopened = scrollTo(app.switches["버튼 햅틱"])
         XCTAssertEqual(reopened.value as? String, "0")
@@ -166,7 +172,7 @@ final class AragornUITests: XCTestCase {
         let recent = app.buttons["recent.ARAGORN TEST"].firstMatch
         XCTAssertTrue(recent.waitForExistence(timeout: 10))
         recent.tap()
-        XCTAssertTrue(notice.wait(for: \.label, toEqual: "ARAGORN TEST 실행 중", timeout: 10))
+        XCTAssertTrue(gameStarted())
     }
 
     func testRewindButtonIsBesideFastForward() {
@@ -189,5 +195,20 @@ final class AragornUITests: XCTestCase {
         openMenu("설정")
         scrollTo(app.buttons["가상 패드를 기본값으로"]).tap()
         app.buttons["돌아가기"].tap()
+    }
+
+    func testReopeningResumesWhereTheGameWasLeft() {
+        // 백그라운드로 가면 이어하기를 남긴다. 다시 열면 그 자리에서 이어서 한다.
+        XCUIDevice.shared.press(.home)
+        app.activate()
+        app.terminate()
+        app.launchArguments = []
+        app.launch()
+        let recent = app.buttons["recent.ARAGORN TEST"].firstMatch
+        XCTAssertTrue(recent.waitForExistence(timeout: 10))
+        recent.tap()
+        XCTAssertTrue(notice.wait(for: \.label, toEqual: "ARAGORN TEST — 지난번에 닫은 자리에서 이어서 합니다", timeout: 10))
+        openMenu("처음부터 다시 시작")
+        XCTAssertTrue(notice.wait(for: \.label, toEqual: "ARAGORN TEST 실행 중", timeout: 10), "처음부터")
     }
 }

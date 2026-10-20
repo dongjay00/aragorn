@@ -54,6 +54,37 @@ pub fn load_session(path: &Path) -> Result<Session, String> {
         .map_err(|e| format!("{name}을(를) 열 수 없습니다: {e}"))
 }
 
+/// 스크린샷 폴더: 사진 폴더의 `Aragorn/`. 사진 폴더를 모르면 ROM 옆 `screenshots/`.
+pub fn screenshot_dir(rom: Option<&Path>) -> PathBuf {
+    directories::UserDirs::new()
+        .and_then(|dirs| dirs.picture_dir().map(|d| d.join("Aragorn")))
+        .or_else(|| rom.and_then(Path::parent).map(|d| d.join("screenshots")))
+        .unwrap_or_else(|| PathBuf::from("screenshots"))
+}
+
+/// `<제목> 001.png`부터 비어 있는 첫 번호. 제목의 경로 구분자는 `_`로 바꾼다.
+pub fn next_screenshot_path(dir: &Path, title: &str) -> PathBuf {
+    let title: String = title
+        .chars()
+        .map(|c| {
+            if matches!(c, '/' | '\\' | ':') {
+                '_'
+            } else {
+                c
+            }
+        })
+        .collect();
+    let title = if title.trim().is_empty() {
+        "Aragorn".to_string()
+    } else {
+        title
+    };
+    (1..)
+        .map(|n| dir.join(format!("{title} {n:03}.png")))
+        .find(|path| !path.exists())
+        .expect("번호는 끝이 없다")
+}
+
 /// 위젯의 키보드 포커스를 없앤다. 게임 키(Tab=배속, 방향키, Enter=Start)가 egui 포커스 이동과
 /// 버튼 누르기로 새지 않게 설정 창이 닫혀 있을 때 매 화면 갱신마다 부른다.
 /// 글자 입력칸(디버거의 주소 입력)의 포커스는 남긴다. 그동안 키보드는 게임에 가지 않는다.
@@ -123,6 +154,8 @@ pub struct AragornApp {
     last_check: Instant,
     exit_handled: bool,
     session: Option<Session>,
+    /// 지금 게임의 ROM 경로 ("처음부터 다시 시작"에 쓴다).
+    rom_path: Option<PathBuf>,
     screen: ScreenView,
     last_tick: Instant,
     /// ROM 로드 결과 등 상태 표시줄에 보일 문구
@@ -174,6 +207,7 @@ impl AragornApp {
             last_check: Instant::now(),
             exit_handled: false,
             session: None,
+            rom_path: None,
             screen: ScreenView::default(),
             last_tick: Instant::now(),
             notice: None,
@@ -200,11 +234,21 @@ impl AragornApp {
         app
     }
 
+    /// ROM을 연다. 이어하기를 켰으면 지난번에 닫은 자리에서 이어서 한다.
     fn open_rom(&mut self, ctx: &egui::Context, path: &Path) {
+        self.open_rom_with(ctx, path, true);
+    }
+
+    /// `resume`이 거짓이면 이어하기 없이 게임 세이브에서 시작한다 ("처음부터 다시 시작").
+    fn open_rom_with(&mut self, ctx: &egui::Context, path: &Path, resume: bool) {
         let flushed = self.flush_session();
         if !proceed_after_flush(flushed, &mut self.unsaved_warned) {
             self.notice = Some(UNSAVED_WARNING.to_string());
             return;
+        }
+        // 다른 게임으로 바꾸기 전에 지금 게임의 자리를 남긴다. 같은 게임을 처음부터 다시 시작할 때는 남기지 않는다.
+        if resume {
+            self.save_resume();
         }
         match load_session(path) {
             Ok(session) => {
@@ -228,7 +272,24 @@ impl AragornApp {
                 }
                 session.set_sound_off(self.config.audio.muted);
                 session.set_rewind_enabled(self.config.rewind.enabled);
+                if resume && self.config.resume.enabled {
+                    match session.resume() {
+                        Ok(true) => {
+                            self.notice = Some(format!(
+                                "{} — 지난번에 닫은 자리에서 이어서 합니다",
+                                session.title()
+                            ));
+                            self.screen.update(ctx, session.framebuffer());
+                        }
+                        Ok(false) => {}
+                        Err(message) => {
+                            log::warn!("{message}");
+                            self.notice = Some(message);
+                        }
+                    }
+                }
                 self.session = Some(session);
+                self.rom_path = Some(path.to_path_buf());
                 self.last_tick = Instant::now();
                 self.collect_session_errors();
             }
@@ -242,6 +303,53 @@ impl AragornApp {
                 }
             }
         }
+    }
+
+    /// 이어하기를 켰으면 지금 게임의 상태를 남긴다. 실패하면 상태 표시줄에 알리고 계속한다.
+    fn save_resume(&mut self) {
+        if !self.config.resume.enabled {
+            return;
+        }
+        let Some(session) = &mut self.session else {
+            return;
+        };
+        if let Err(message) = session.save_resume() {
+            log::error!("{message}");
+            self.notice = Some(message);
+        }
+    }
+
+    /// 지금 게임을 게임 세이브에서 다시 시작한다 (이어하기를 쓰지 않는다).
+    fn restart(&mut self, ctx: &egui::Context) {
+        if let Some(path) = self.rom_path.clone() {
+            self.open_rom_with(ctx, &path, false);
+        }
+    }
+
+    /// 지금 화면(화면 필터 적용)을 사진 폴더의 `Aragorn/`에 PNG로 저장한다.
+    fn save_screenshot(&mut self) {
+        let Some(session) = &self.session else {
+            return;
+        };
+        let pixels = self
+            .config
+            .video
+            .apply(session.framebuffer(), session.debug().cgb());
+        let png = aragorn_app::screenshot::png(
+            &pixels,
+            gb_core::ppu::SCREEN_WIDTH,
+            gb_core::ppu::SCREEN_HEIGHT,
+            aragorn_app::screenshot::SCALE,
+        );
+        let dir = screenshot_dir(self.rom_path.as_deref());
+        let result = std::fs::create_dir_all(&dir).and_then(|()| {
+            let path = next_screenshot_path(&dir, session.title());
+            std::fs::write(&path, png).map(|()| path)
+        });
+        self.notice = Some(match result {
+            Ok(path) => format!("스크린샷을 저장했습니다: {}", path.display()),
+            Err(e) => format!("스크린샷을 저장하지 못했습니다: {e}"),
+        });
     }
 
     /// 최근 게임 목록 맨 앞에 넣는다. 헤더에 제목이 없으면 파일 이름을 쓴다.
@@ -525,6 +633,7 @@ impl AragornApp {
     fn flush_persistent_state(&mut self) {
         self.save_config();
         self.flush_session();
+        self.save_resume();
     }
 }
 
@@ -543,6 +652,7 @@ impl eframe::App for AragornApp {
         if ctx.input(|i| i.viewport().close_requested()) && !self.exit_handled {
             let flushed = self.flush_session();
             if proceed_after_flush(flushed, &mut self.unsaved_warned) {
+                self.save_resume();
                 self.exit_handled = true;
                 events.push(UpdateEvent::AppExiting);
             } else {
@@ -567,6 +677,12 @@ impl eframe::App for AragornApp {
         {
             self.run_slot_command(ctx, command);
         }
+        if input.is_some()
+            && !ctx.text_edit_focused()
+            && ctx.input(|i| input::pressed_once(&i.events, egui::Key::F12))
+        {
+            self.save_screenshot();
+        }
         self.run_emulation(ctx, input);
         // 6시간 재확인 타이머가 유휴 상태에서도 돌도록 주기적으로 깨운다.
         ctx.request_repaint_after(Duration::from_secs(60));
@@ -577,6 +693,8 @@ impl eframe::App for AragornApp {
 
         let mut open_requested = false;
         let mut recent_requested: Option<PathBuf> = None;
+        let mut restart_requested = false;
+        let mut screenshot_requested = false;
         let mut slot_command = None;
         egui::Panel::top("toolbar").show(ui, |ui| {
             ui.horizontal(|ui| {
@@ -609,7 +727,19 @@ impl eframe::App for AragornApp {
                     let now = SystemClock.now_unix();
                     ui.menu_button("스테이트", |ui| {
                         slot_command = self.slots.show(ui, session, now);
+                        ui.separator();
+                        if ui
+                            .button("처음부터 다시 시작")
+                            .on_hover_text("이어하기 없이 게임 세이브에서 다시 시작합니다")
+                            .clicked()
+                        {
+                            restart_requested = true;
+                            ui.close();
+                        }
                     });
+                    if ui.button("스크린샷").on_hover_text("F12").clicked() {
+                        screenshot_requested = true;
+                    }
                 }
                 let mut muted = self.config.audio.muted;
                 if ui.checkbox(&mut muted, "음소거").changed() {
@@ -718,6 +848,13 @@ impl eframe::App for AragornApp {
         };
         for command in cheat_commands {
             self.run_cheat_command(command);
+        }
+        if restart_requested {
+            let ctx = ui.ctx().clone();
+            self.restart(&ctx);
+        }
+        if screenshot_requested {
+            self.save_screenshot();
         }
         if let Some(path) = recent_requested {
             let ctx = ui.ctx().clone();
@@ -921,6 +1058,66 @@ mod tests {
         let canonical = PathBuf::from(&saved.recent[0].path);
         app.open_rom(&ctx, &canonical);
         assert!(store.load().recent.is_empty(), "지운 파일은 목록에서 뺀다");
+    }
+
+    #[test]
+    fn screenshot_names_count_up_and_avoid_separators() {
+        let dir = tempfile::tempdir().unwrap();
+        let first = next_screenshot_path(dir.path(), "PM/RED");
+        assert_eq!(first.file_name().unwrap(), "PM_RED 001.png");
+        std::fs::write(&first, b"").unwrap();
+        assert_eq!(
+            next_screenshot_path(dir.path(), "PM/RED")
+                .file_name()
+                .unwrap(),
+            "PM_RED 002.png"
+        );
+        assert_eq!(
+            next_screenshot_path(dir.path(), " ").file_name().unwrap(),
+            "Aragorn 001.png"
+        );
+    }
+
+    #[test]
+    fn closing_another_game_leaves_a_resume_point() {
+        let dir = tempfile::tempdir().unwrap();
+        let rom = |name: &str| {
+            let path = dir.path().join(name);
+            let mut data = vec![0u8; 0x8000];
+            // LD HL,0xC000 ; INC (HL) ; JR -3
+            data[0x0100..0x0106].copy_from_slice(&[0x21, 0x00, 0xC0, 0x34, 0x18, 0xFD]);
+            std::fs::write(&path, &data).unwrap();
+            path
+        };
+        let (first, second) = (rom("a.gb"), rom("b.gb"));
+        let ctx = egui::Context::default();
+        let mut app = AragornApp::new(
+            &ctx,
+            AppDeps {
+                config_store: Box::new(MemoryConfig::default()),
+                source: None,
+                updater: None,
+                release_page: None,
+                initial_rom: Some(first.clone()),
+            },
+        );
+        for _ in 0..5 {
+            app.session
+                .as_mut()
+                .unwrap()
+                .advance(aragorn_app::pacing::FRAME_DURATION);
+        }
+        let at_close = app.session.as_ref().unwrap().debug().peek(0xC000);
+        app.open_rom(&ctx, &second);
+        assert!(dir.path().join("a.ssr").exists());
+        app.open_rom(&ctx, &first);
+        assert_eq!(app.session.as_ref().unwrap().debug().peek(0xC000), at_close);
+        app.restart(&ctx);
+        assert_ne!(
+            app.session.as_ref().unwrap().debug().peek(0xC000),
+            at_close,
+            "처음부터"
+        );
     }
 
     #[test]

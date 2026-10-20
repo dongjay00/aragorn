@@ -157,8 +157,46 @@ impl Emulator {
             state.background = background;
             if background {
                 state.session.flush();
+                // 앱이 백그라운드에서 꺼져도 이어서 할 수 있게 지금 자리를 남긴다.
+                state.save_resume_if_enabled();
             }
         });
+    }
+
+    /// 백그라운드로 가거나 게임을 닫을 때 이어하기를 남길지.
+    pub fn set_auto_resume(&self, on: bool) {
+        self.post(move |state| state.auto_resume = on);
+    }
+
+    /// 지금 자리를 이어하기로 남긴다 (다른 게임을 열기 전에).
+    pub fn save_resume(&self) -> Result<(), EmulatorError> {
+        self.call(|state| state.session.save_resume())?
+            .map_err(|reason| EmulatorError::State { reason })
+    }
+
+    /// 이어하기가 있으면 그 자리로 간다. 갔으면 `true`. 이어하기 뒤로 세이브 파일이 바뀌었으면
+    /// 세이브 파일을 지키려고 가지 않고 이유를 오류로 돌려준다.
+    pub fn resume(&self) -> Result<bool, EmulatorError> {
+        self.call(|state| {
+            let resumed = state.session.resume()?;
+            if resumed {
+                state.publish();
+            }
+            Ok(resumed)
+        })?
+        .map_err(|reason| EmulatorError::State { reason })
+    }
+
+    /// 지금 화면(필터 적용)을 3배로 키운 PNG.
+    pub fn screenshot(&self) -> Result<Vec<u8>, EmulatorError> {
+        self.call(|state| {
+            aragorn_app::screenshot::png(
+                &state.filtered_frame(),
+                SCREEN_WIDTH as usize,
+                SCREEN_HEIGHT as usize,
+                aragorn_app::screenshot::SCALE,
+            )
+        })
     }
 
     /// 강제 업데이트가 필요하면 게임을 멈추고 스테이트를 막는다.
@@ -693,6 +731,36 @@ mod tests {
         let after = emulator.frame();
         assert_ne!(before, after);
         assert_eq!(&after[..4], &[0xFF, 0xFF, 0xFF, 0xFF], "흰색 배경");
+    }
+
+    #[test]
+    fn closing_leaves_a_resume_point_when_enabled() {
+        let dir = tempfile::tempdir().unwrap();
+        let emulator = start(&dir);
+        assert!(!emulator.resume().unwrap(), "아직 없다");
+        emulator.stop();
+        assert!(
+            !dir.path().join("saves/test.ssr").exists(),
+            "꺼져 있으면 남기지 않는다"
+        );
+
+        let emulator = start(&dir);
+        emulator.set_auto_resume(true);
+        emulator.stop();
+        assert!(dir.path().join("saves/test.ssr").exists());
+        let emulator = start(&dir);
+        assert!(emulator.resume().unwrap());
+    }
+
+    #[test]
+    fn screenshot_is_a_scaled_png() {
+        let dir = tempfile::tempdir().unwrap();
+        let emulator = start(&dir);
+        let png = emulator.screenshot().unwrap();
+        assert_eq!(&png[1..4], b"PNG");
+        // IHDR의 폭과 높이
+        assert_eq!(u32::from_be_bytes(png[16..20].try_into().unwrap()), 480);
+        assert_eq!(u32::from_be_bytes(png[20..24].try_into().unwrap()), 432);
     }
 
     #[test]

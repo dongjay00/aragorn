@@ -319,6 +319,15 @@ impl Settings {
         self.change(|config| config.app.rewind.enabled = on)
     }
 
+    /// 게임을 닫을 때의 자리에서 이어서 할지. 기본은 켜짐.
+    pub fn auto_resume(&self) -> bool {
+        self.config().app.resume.enabled
+    }
+
+    pub fn set_auto_resume(&self, on: bool) -> Result<(), EmulatorError> {
+        self.change(|config| config.app.resume.enabled = on)
+    }
+
     /// 최근에 연 게임, 최근 것부터.
     pub fn recent_games(&self) -> Vec<RecentRom> {
         let now = SystemClock.now_unix();
@@ -579,6 +588,9 @@ mod tests {
         assert_eq!(reloaded.video().palette, Palette::Gray);
         assert!(reloaded.video().lcd_grid);
         assert!(!reloaded.rewind_enabled());
+        assert!(reloaded.auto_resume());
+        reloaded.set_auto_resume(false).unwrap();
+        assert!(!open(&dir).auto_resume());
         let recent = reloaded.recent_games();
         assert_eq!(
             recent.iter().map(|g| &*g.title).collect::<Vec<_>>(),
