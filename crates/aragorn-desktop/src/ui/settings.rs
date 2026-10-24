@@ -51,105 +51,149 @@ impl SettingsView {
     }
 
     /// 설정 창을 그린다. 설정이 바뀌었으면 `true`.
+    ///
+    /// 내용이 길어 본 창 안에서는 잘리므로 따로 OS 창을 띄운다. 창을 따로 띄울 수 없는 환경에서는
+    /// 본 창 안에 스크롤되는 창으로 그린다.
     pub fn show(&mut self, ctx: &egui::Context, config: &mut Config) -> bool {
-        let mut open = self.open;
-        let mut changed = false;
-        let input = &mut config.input;
-        egui::Window::new("설정")
-            .open(&mut open)
-            .resizable(false)
-            .show(ctx, |ui| {
-                ui.label("칸을 누른 뒤 지정할 키나 게임패드 버튼을 누르세요. 오른쪽 클릭하면 지정을 해제합니다.");
-                ui.label("F1–F10은 스테이트 단축키라 지정할 수 없습니다.");
-                ui.add_space(4.0);
-                egui::Grid::new("bindings").striped(true).show(ui, |ui| {
-                    ui.strong("기능");
-                    ui.strong("키보드");
-                    ui.strong("게임패드");
-                    ui.end_row();
-                    for action in Action::ALL {
-                        ui.label(action.label());
-                        for device in [Device::Keyboard, Device::Gamepad] {
-                            changed |= self.binding_cell(ui, input, device, action);
-                        }
-                        ui.end_row();
+        if !self.open {
+            return false;
+        }
+        let mut open = true;
+        let changed = if ctx.embed_viewports() {
+            egui::Window::new("설정")
+                .open(&mut open)
+                .vscroll(true)
+                .show(ctx, |ui| self.contents(ui, config))
+                .and_then(|response| response.inner)
+                .unwrap_or(false)
+        } else {
+            let builder = egui::ViewportBuilder::default()
+                .with_title("설정")
+                .with_inner_size([600.0, 720.0])
+                .with_min_inner_size([360.0, 240.0]);
+            ctx.show_viewport_immediate(
+                egui::ViewportId::from_hash_of("aragorn-settings"),
+                builder,
+                |ui, _| {
+                    if ui.ctx().input(|i| i.viewport().close_requested()) {
+                        open = false;
                     }
-                });
-                ui.add_space(8.0);
-                ui.horizontal(|ui| {
-                    ui.label("기본 속도:");
-                    for speed in BaseSpeed::ALL {
-                        changed |= ui
-                            .radio_value(&mut input.base_speed, speed, speed.label())
-                            .changed();
-                    }
-                });
-                ui.label("2배·4배에서는 소리가 빠르고 높게 들립니다. 무제한에서는 소리가 나지 않습니다.");
-                ui.horizontal(|ui| {
-                    ui.label("배속 속도:");
-                    for speed in FastForward::ALL {
-                        changed |= ui
-                            .radio_value(&mut input.fast_forward, speed, speed.label())
-                            .changed();
-                    }
-                });
-                ui.add_space(8.0);
-                if ui.button("키 설정과 속도를 기본값으로").clicked() {
-                    *input = InputConfig::default();
-                    self.capturing = None;
-                    changed = true;
-                }
-                ui.separator();
-                ui.strong("화면");
-                ui.horizontal(|ui| {
-                    ui.label("흑백 게임 색:");
-                    for palette in DmgPalette::ALL {
-                        changed |= ui
-                            .radio_value(&mut config.video.palette, palette, palette.label())
-                            .changed();
-                    }
-                });
-                changed |= ui
-                    .checkbox(
-                        &mut config.video.color_correction,
-                        "컬러 게임 색 보정 (게임보이 컬러 화면처럼 덜 진하게)",
-                    )
-                    .changed();
-                changed |= ui
-                    .checkbox(&mut config.video.lcd_grid, "LCD 격자 (3배 이상으로 그릴 때)")
-                    .changed();
-                changed |= ui
-                    .checkbox(
-                        &mut config.video.sgb_colors,
-                        "슈퍼 게임보이 색 (포켓몬 레드·블루·옐로 등 SGB 지원 게임)",
-                    )
-                    .changed();
-                changed |= ui
-                    .checkbox(&mut config.video.sgb_border, "슈퍼 게임보이 테두리")
-                    .changed();
-                ui.separator();
-                ui.strong("되감기");
-                changed |= ui
-                    .checkbox(
-                        &mut config.rewind.enabled,
-                        "되감기 키를 누르는 동안 최근 약 20초를 거꾸로 돌린다",
-                    )
-                    .changed();
-                ui.label("끄면 되감기용 스테이트를 쌓지 않아 메모리를 아낍니다.");
-                ui.separator();
-                ui.strong("이어하기");
-                changed |= ui
-                    .checkbox(
-                        &mut config.resume.enabled,
-                        "게임을 닫을 때의 자리를 남기고, 다시 열면 그 자리에서 이어서 한다",
-                    )
-                    .changed();
-                ui.label("스테이트 메뉴의 \"처음부터 다시 시작\"으로 게임 세이브에서 시작할 수 있습니다.");
-            });
+                    // 이 창에 초점이 있으면 키 입력은 본 창이 아니라 이 창으로 들어온다.
+                    let key = ui.ctx().input(|i| pressed_key(&i.events));
+                    let mut changed =
+                        key.is_some_and(|key| self.capture(&mut config.input, Some(key), None));
+                    changed |= egui::CentralPanel::default()
+                        .show(ui, |ui| {
+                            egui::ScrollArea::vertical()
+                                .show(ui, |ui| self.contents(ui, config))
+                                .inner
+                        })
+                        .inner;
+                    changed
+                },
+            )
+        };
         self.open = open;
         if !open {
             self.capturing = None;
         }
+        changed
+    }
+
+    fn contents(&mut self, ui: &mut egui::Ui, config: &mut Config) -> bool {
+        let mut changed = false;
+        let input = &mut config.input;
+        ui.label(
+            "칸을 누른 뒤 지정할 키나 게임패드 버튼을 누르세요. 오른쪽 클릭하면 지정을 해제합니다.",
+        );
+        ui.label("F1–F10은 스테이트 단축키라 지정할 수 없습니다.");
+        ui.add_space(4.0);
+        egui::Grid::new("bindings").striped(true).show(ui, |ui| {
+            ui.strong("기능");
+            ui.strong("키보드");
+            ui.strong("게임패드");
+            ui.end_row();
+            for action in Action::ALL {
+                ui.label(action.label());
+                for device in [Device::Keyboard, Device::Gamepad] {
+                    changed |= self.binding_cell(ui, input, device, action);
+                }
+                ui.end_row();
+            }
+        });
+        ui.add_space(8.0);
+        ui.horizontal(|ui| {
+            ui.label("기본 속도:");
+            for speed in BaseSpeed::ALL {
+                changed |= ui
+                    .radio_value(&mut input.base_speed, speed, speed.label())
+                    .changed();
+            }
+        });
+        ui.label("2배·4배에서는 소리가 빠르고 높게 들립니다. 무제한에서는 소리가 나지 않습니다.");
+        ui.horizontal(|ui| {
+            ui.label("배속 속도:");
+            for speed in FastForward::ALL {
+                changed |= ui
+                    .radio_value(&mut input.fast_forward, speed, speed.label())
+                    .changed();
+            }
+        });
+        ui.add_space(8.0);
+        if ui.button("키 설정과 속도를 기본값으로").clicked() {
+            *input = InputConfig::default();
+            self.capturing = None;
+            changed = true;
+        }
+        ui.separator();
+        ui.strong("화면");
+        ui.horizontal(|ui| {
+            ui.label("흑백 게임 색:");
+            for palette in DmgPalette::ALL {
+                changed |= ui
+                    .radio_value(&mut config.video.palette, palette, palette.label())
+                    .changed();
+            }
+        });
+        changed |= ui
+            .checkbox(
+                &mut config.video.color_correction,
+                "컬러 게임 색 보정 (게임보이 컬러 화면처럼 덜 진하게)",
+            )
+            .changed();
+        changed |= ui
+            .checkbox(
+                &mut config.video.lcd_grid,
+                "LCD 격자 (3배 이상으로 그릴 때)",
+            )
+            .changed();
+        changed |= ui
+            .checkbox(
+                &mut config.video.sgb_colors,
+                "슈퍼 게임보이 색 (포켓몬 레드·블루·옐로 등 SGB 지원 게임)",
+            )
+            .changed();
+        changed |= ui
+            .checkbox(&mut config.video.sgb_border, "슈퍼 게임보이 테두리")
+            .changed();
+        ui.separator();
+        ui.strong("되감기");
+        changed |= ui
+            .checkbox(
+                &mut config.rewind.enabled,
+                "되감기 키를 누르는 동안 최근 약 20초를 거꾸로 돌린다",
+            )
+            .changed();
+        ui.label("끄면 되감기용 스테이트를 쌓지 않아 메모리를 아낍니다.");
+        ui.separator();
+        ui.strong("이어하기");
+        changed |= ui
+            .checkbox(
+                &mut config.resume.enabled,
+                "게임을 닫을 때의 자리를 남기고, 다시 열면 그 자리에서 이어서 한다",
+            )
+            .changed();
+        ui.label("스테이트 메뉴의 \"처음부터 다시 시작\"으로 게임 세이브에서 시작할 수 있습니다.");
         changed
     }
 
@@ -184,6 +228,19 @@ impl SettingsView {
         }
         false
     }
+}
+
+/// 이번에 처음 눌린 키.
+pub fn pressed_key(events: &[egui::Event]) -> Option<Key> {
+    events.iter().find_map(|e| match e {
+        egui::Event::Key {
+            key,
+            pressed: true,
+            repeat: false,
+            ..
+        } => Some(*key),
+        _ => None,
+    })
 }
 
 fn bindings_mut(input: &mut InputConfig, device: Device) -> &mut aragorn_app::input::Bindings {

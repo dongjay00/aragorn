@@ -8,7 +8,7 @@ use crate::{
         io_view::IoView,
         link::{LinkCommand, LinkView},
         screen::ScreenView,
-        settings::SettingsView,
+        settings::{self, SettingsView},
         state_slots::{self, SlotCommand, SlotsView},
         update_view::{self, UpdateUiAction},
         vram_view::VramView,
@@ -430,17 +430,7 @@ impl AragornApp {
             self.notice = Some(notice);
         }
         if self.settings.is_capturing() {
-            let key = ctx.input(|i| {
-                i.events.iter().find_map(|e| match e {
-                    egui::Event::Key {
-                        key,
-                        pressed: true,
-                        repeat: false,
-                        ..
-                    } => Some(*key),
-                    _ => None,
-                })
-            });
+            let key = ctx.input(|i| settings::pressed_key(&i.events));
             if self
                 .settings
                 .capture(&mut self.config.input, key, pad.first_pressed)
